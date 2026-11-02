@@ -28,6 +28,8 @@ log = logging.getLogger(__name__)
 
 DEFAULT_POLL_SECONDS = 5.0
 BATCH = 1000
+LISTEN_RETRY_SECONDS = 0.5
+LISTEN_RETRY_MAX_SECONDS = 30.0
 
 ListenFn = Callable[[str, str], AsyncIterator[str]]
 
@@ -110,13 +112,25 @@ class TaskChangeHub:
             sub.offer(task_id)
 
     async def _listen_loop(self) -> None:
-        async for payload in self._listen(self._dsn, CHANNEL):
+        """Run the shared LISTEN; any unexpected error restarts it after a capped backoff
+        (agents-common reconnects only on connection errors)."""
+        delay = LISTEN_RETRY_SECONDS
+        while True:
             try:
-                task_id = int(payload)
-            except ValueError:
-                continue
-            self._heard.add(task_id)
-            self._publish(task_id)
+                async for payload in self._listen(self._dsn, CHANNEL):
+                    delay = LISTEN_RETRY_SECONDS
+                    try:
+                        task_id = int(payload)
+                    except ValueError:
+                        continue
+                    self._heard.add(task_id)
+                    self._publish(task_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("task_changed listener failed; restarting in %.1fs", delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, LISTEN_RETRY_MAX_SECONDS)
 
     async def _max_event_id(self) -> int:
         async with self._pool.connection() as conn:

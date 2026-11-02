@@ -6,8 +6,10 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 import uvicorn
+from agents_common.db import listen
 from test_api_tasks import PREFIX, TASKS, agent, create
 
+from agents_taskboard.api import stream
 from agents_taskboard.api.app import create_service_app, create_web_app
 
 STREAM = f"{PREFIX}/stream"
@@ -141,3 +143,29 @@ async def test_service_app_does_not_serve_stream(settings, pool):
     ) as client:
         r = await client.get(STREAM, headers=agent())
         assert r.status_code == 404
+
+
+async def test_listener_restarts_after_unexpected_error(
+    settings, pool, service_client, monkeypatch
+):
+    monkeypatch.setattr(stream, "LISTEN_RETRY_SECONDS", 0.05)
+    calls = []
+
+    async def flaky_listen(url: str, channel: str) -> AsyncIterator[str]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        async for payload in listen(url, channel):
+            yield payload
+
+    # poll far slower than the test waits, so only a live listener can deliver
+    app = create_web_app(settings, pool, stream_poll_seconds=30, listen_fn=flaky_listen)
+    key = (await create(service_client))["key"]
+    async with serve(app) as base, open_stream(app, base) as sse:
+        await asyncio.sleep(0.5)
+        assert len(calls) >= 2
+        await service_client.post(
+            f"{TASKS}/{key}/comments", json={"body": "after restart"}, headers=agent()
+        )
+        frame = await sse.next()
+        assert json.loads(frame["data"]) == {"key": key}

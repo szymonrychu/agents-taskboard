@@ -48,3 +48,6 @@ Lessons that outlive a session. Newest first.
 ## 2026-11-02 - scaffold
 
 Created as a separate Python microservice (not a part of the orchestrator) because the taskboard owns its own Postgres and the hard rules allow cross-service access only through HTTP or the queue, one writer per table. The scaffold has no runtime dependencies yet; FastAPI, psycopg and agents-common are added with the first feature task that needs them.
+
+## 2026-11-02 stream listener restarts on any error
+agents-common `listen` reconnects only on OperationalError/OSError; any other exception would end the hub's listen task silently while `running` stayed true. `_listen_loop` now logs and restarts after a capped exponential backoff (0.5 s to 30 s, reset on a delivered notification); CancelledError still propagates. The poll fallback covers the gap.
