@@ -81,3 +81,34 @@ class TodoPatch(_Strict):
         if any(getattr(self, f) is None for f in self.model_fields_set):
             raise ValueError("text and status cannot be null")
         return self
+
+
+class DecisionOption(_Strict):
+    label: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    recommended: bool = False
+
+
+class DecisionCreate(_Strict):
+    question: str = Field(min_length=1, max_length=2000)
+    context: str = ""
+    options: list[DecisionOption] = Field(min_length=2, max_length=8)
+    client_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _one_recommended(self) -> Self:
+        if sum(o.recommended for o in self.options) != 1:
+            raise ValueError("exactly one option must be recommended")
+        return self
+
+
+class DecisionAnswer(_Strict):
+    choice: int | None = Field(default=None, ge=0)
+    text: str | None = None
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _one_answer(self) -> Self:
+        if (self.choice is None) == (self.text is None or not self.text.strip()):
+            raise ValueError("give exactly one of choice and a non-empty text")
+        return self

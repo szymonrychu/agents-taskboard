@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from agents_taskboard.api.actors import actor_from_service, actor_from_web
+from agents_taskboard.api.decisions import build_router as build_decision_router
 from agents_taskboard.api.errors import ApiError, error_response
 from agents_taskboard.api.tasks import build_router
 from agents_taskboard.api.todos import build_router as build_todo_router
@@ -102,6 +103,7 @@ def create_web_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI:
     app = _base_app(settings, pool, "agents-taskboard")
     app.include_router(build_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_todo_router(actor_from_web), prefix=PREFIX)
+    app.include_router(build_decision_router(actor_from_web, answerable=True), prefix=PREFIX)
     app.add_middleware(SourceAllowlist, networks=settings.api_networks())
     return app
 
@@ -111,5 +113,6 @@ def create_service_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI
     app = _base_app(settings, pool, "agents-taskboard-service")
     app.include_router(build_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_todo_router(actor_from_service), prefix=PREFIX)
+    app.include_router(build_decision_router(actor_from_service), prefix=PREFIX)
     app.add_middleware(ServiceTokenGate, tokens=[settings.relay_token.get_secret_value()])
     return app

@@ -2,6 +2,14 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-02 - decisions and notice outbox
+
+- Ask is agent-only (403 `agent_required` for a user) on both apps; answer is built only when `build_router(..., answerable=True)`, which only the web app passes, so the service app has no route and no OpenAPI path. Withdraw is on both apps: 404 unknown decision or other task, 403 not the asking session (users included), 409 `not_open` when not open.
+- Answer and withdraw are one status-guarded `UPDATE ... WHERE status='open' RETURNING`; the race loser matches zero rows and gets 409 `already_answered`. They touch `updated_at` only, never bump `version`, like comments and todo. Events: `decision_asked`, `decision_answered`, `decision_withdrawn` {decision_id}, all with NOTIFY in the same transaction.
+- The notice insert is `INSERT ... ON CONFLICT DO NOTHING` against the partial unique index `notices_one_pending_idx`, so a second answer to the same asker while a notice is pending adds no row.
+- Closing a task (done/dropped) does NOT withdraw its open decisions, and answering an open decision on a closed task works (leader decision 2026-11-02): the asking session still needs its answer.
+- Answer is stored as `{"choice": i, "label": ...}` or `{"text": ...}`; a body must carry exactly one of `choice` (index, 422 out of range) and a non-blank `text`, plus an optional `note`. Ask/withdraw/answer return the decision JSON (same shape as in the task JSON plus `task_key`); an ask replayed on (task, asking session, client_key) returns the existing one with 200.
+
 ## 2026-11-02 - todo checklist
 
 - Todo edits (`PUT /tasks/{key}/todo`, `PATCH /tasks/{key}/todo/{item_id}`) follow the comment rule: they touch `updated_at` (which also row-locks the task), log `todo_replaced` {count} / `todo_updated` {item_id, fields}, NOTIFY, never bump `version` (so they cannot make a title/body editor stale) and never create a notice. PUT deletes and reinserts, so item ids change on every replace; PATCH only addresses ids from the latest read and answers 404 for an item of another task.
