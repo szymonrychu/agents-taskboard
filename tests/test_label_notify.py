@@ -5,7 +5,7 @@ import httpx
 import pytest
 from agents_common.fake_orchestrator import FakeOrchestrator
 from agents_common.orchestrator import OrchestratorClient, OrchestratorUnavailable
-from test_api_tasks import S1, TASKS, agent, create
+from test_api_tasks import S1, S2, TASKS, agent, create
 from test_notifier import PUBLIC, run_until, statuses
 
 from agents_taskboard.notifier import SessionLookup, run_notifier, scan_label_events
@@ -154,12 +154,42 @@ async def test_no_notice_without_matching_sessions(service_client, pool, conn, f
     ).fetchone() == (0,)
 
 
-async def test_creator_session_not_notified(service_client, pool, conn, fake, lookup):
+async def test_creating_session_is_the_actor_and_not_notified(
+    service_client, pool, conn, fake, lookup
+):
     live(fake, "one", sid=S1)
     other = live(fake, "one")
     await create(service_client, labels=["one"], headers=agent(S1))
     await scan_all(pool, lookup)
     assert label_notices(conn) == [other]
+
+
+async def test_user_added_label_notifies_the_creator_session(
+    service_client, web_client, pool, conn, fake, lookup
+):
+    creator = live(fake, "infra", sid=S1)
+    other = live(fake, "infra")
+    key = (await create(service_client, headers=agent(S1)))["key"]
+    r = await web_client.patch(f"{TASKS}/{key}", json={"version": 1, "labels": ["infra"]})
+    assert r.status_code == 200, r.text
+    await scan_all(pool, lookup)
+    assert sorted(label_notices(conn)) == sorted([creator, other])
+
+
+async def test_agent_edit_does_not_notify_the_editing_session(
+    service_client, pool, conn, fake, lookup
+):
+    editor = live(fake, "infra", sid=S2)
+    creator = live(fake, "infra", sid=S1)
+    other = live(fake, "infra")
+    key = (await create(service_client, headers=agent(S1)))["key"]
+    r = await service_client.patch(
+        f"{TASKS}/{key}", json={"version": 1, "labels": ["infra"]}, headers=agent(S2)
+    )
+    assert r.status_code == 200, r.text
+    await scan_all(pool, lookup)
+    assert editor not in label_notices(conn)
+    assert sorted(label_notices(conn)) == sorted([creator, other])
 
 
 async def test_label_notice_text_is_fixed_template(
@@ -250,3 +280,55 @@ async def test_decision_answer_notice_unchanged(service_client, pool, conn, fake
     assert conn.execute("SELECT reason, status FROM notices").fetchall() == [
         ("decision", "pending")
     ]
+
+
+def mock_lookup(handler) -> SessionLookup:
+    return SessionLookup("http://orch.test", "t", transport=httpx.MockTransport(handler))
+
+
+MALFORMED = {
+    "not json": lambda r: httpx.Response(200, content=b"<html>oops</html>"),
+    "not a list": lambda r: httpx.Response(200, json={"sessions": []}),
+    "item not an object": lambda r: httpx.Response(200, json=["x"]),
+    "missing id": lambda r: httpx.Response(200, json=[{"labels": ["one"]}]),
+    "labels wrong type": lambda r: httpx.Response(200, json=[{"id": "a", "labels": 5}]),
+}
+
+
+@pytest.mark.parametrize("case", MALFORMED)
+async def test_malformed_200_is_orchestrator_unavailable(case):
+    lk = mock_lookup(MALFORMED[case])
+    try:
+        with pytest.raises(OrchestratorUnavailable):
+            await lk.live_session_ids(["one"])
+    finally:
+        await lk.aclose()
+
+
+async def test_malformed_lookup_keeps_notifier_running_and_delivers_decision_notices(
+    service_client, fast, pool, conn, fake, client
+):
+    sid = live(fake, "one")
+    await create(service_client, labels=["one"])
+    key = (await create(service_client))["key"]
+    conn.execute(
+        "INSERT INTO notices (task_id, session_id, reason, status)"
+        " VALUES (%s, %s, 'decision', 'pending')",
+        (int(key[2:]), sid),
+    )
+    lk = mock_lookup(lambda r: httpx.Response(200, json=[{"labels": ["one"]}]))
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_notifier(fast, pool, client, stop, lk))
+    try:
+        async with asyncio.timeout(10):
+            while statuses(conn) != ["sent"]:
+                await asyncio.sleep(0.02)
+        assert not task.done()
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, 5)
+        await lk.aclose()
+    assert label_notices(conn) == []
+    assert conn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'label_added' AND scanned_at IS NULL"
+    ).fetchone() == (1,)

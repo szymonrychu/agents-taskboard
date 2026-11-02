@@ -76,23 +76,26 @@ class SessionLookup:
         if resp.status_code != 200:
             raise OrchestratorUnavailable(f"GET {path}: HTTP {resp.status_code}")
         wanted = set(labels)
-        return [
-            str(s["id"])
-            for s in resp.json()
-            if s.get("desired", "active") == "active" and wanted & set(s.get("labels") or [])
-        ]
+        try:
+            return [
+                str(s["id"])
+                for s in resp.json()
+                if s.get("desired", "active") == "active" and wanted & set(s.get("labels") or [])
+            ]
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise OrchestratorUnavailable(f"GET {path}: malformed response: {exc!r}") from exc
 
 
 async def scan_label_events(conn: psycopg.AsyncConnection, lookup: SessionLookup) -> bool | None:
     """Scan one unscanned `label_added` event: queue a label notice for every live session
-    sharing an added label, except the task creator's own. None: nothing to scan. A failed
-    lookup raises and, with the caller's transaction rolled back, leaves the event unscanned
-    (no loss; the unique index makes a re-scan duplicate-free)."""
+    sharing an added label, except the session that made the change. None: nothing to scan.
+    A failed lookup raises and, with the caller's transaction rolled back, leaves the event
+    unscanned (no loss; the unique index makes a re-scan duplicate-free)."""
     event = await claim_label_event(conn)
     if event is None:
         return None
     for session_id in await lookup.live_session_ids(event.labels):
-        if session_id != event.creator_session:
+        if session_id != event.actor_session:
             await enqueue_label_notice(conn, event.task_id, session_id)
     await mark_scanned(conn, event.id)
     return True

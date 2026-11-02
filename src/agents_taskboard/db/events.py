@@ -45,15 +45,15 @@ class LabelEvent:
     id: int
     task_id: int
     labels: list[str]
-    creator_session: str | None
+    actor_session: str | None
 
 
 async def claim_label_event(conn: psycopg.AsyncConnection) -> LabelEvent | None:
     """Lock the oldest unscanned `label_added` event no other notifier holds. The caller keeps
     the transaction open until `mark_scanned`, so a second notifier skips the row."""
     cur = await conn.execute(
-        "SELECT e.id, e.task_id, e.detail->'labels', t.created_by_session"
-        " FROM events e JOIN tasks t ON t.id = e.task_id"
+        "SELECT e.id, e.task_id, e.detail->'labels', e.actor_session"
+        " FROM events e"
         " WHERE e.kind = 'label_added' AND e.scanned_at IS NULL"
         " ORDER BY e.id LIMIT 1 FOR UPDATE OF e SKIP LOCKED"
     )
