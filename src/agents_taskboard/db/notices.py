@@ -20,6 +20,18 @@ async def enqueue_decision_notice(
     )
 
 
+async def enqueue_label_notice(
+    conn: psycopg.AsyncConnection, task_id: int, session_id: str
+) -> None:
+    """Queue a regular-lane notice for a session sharing a label with the task. The unique
+    index on (task, session) for reason 'label' makes it at most once, ever."""
+    await conn.execute(
+        "INSERT INTO notices (task_id, session_id, reason, status)"
+        " VALUES (%s, %s, 'label', 'pending') ON CONFLICT DO NOTHING",
+        (task_id, session_id),
+    )
+
+
 @dataclass(frozen=True)
 class Notice:
     id: int

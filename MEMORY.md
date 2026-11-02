@@ -2,6 +2,12 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-02 label-match notifier
+
+- The scanner runs inside the notifier loop (same advisory singleton), before each send: `scan_label_events(conn, lookup)` locks one unscanned `label_added` event (`FOR UPDATE OF e SKIP LOCKED`), asks the orchestrator once with all added labels (`GET /api/v1/sessions?label=..` repeated, any match), inserts `reason='label'` notices `ON CONFLICT DO NOTHING` (unique `(task_id, session_id)` makes it once per task and session, ever), skips `tasks.created_by_session`, then a guarded `UPDATE events SET scanned_at`. One transaction, so a failed lookup rolls back and the event stays unscanned.
+- agents-common v0.7.0 `OrchestratorClient` has no list-sessions method, so `notifier.SessionLookup` is a small local httpx client (agents-common untouched). The sessions list is a plain JSON array (no paging). It also filters client-side on `desired == 'active'` and label intersection, because the orchestrator already does but `FakeOrchestrator` ignores `label`.
+- Lookup failure backoff is in memory in the loop (poll * 2^n, capped at the notifier backoff max), not a column: it pauses only scanning, never sending, and a restart simply retries at once. `run_notifier(..., lookup=None)` builds its own `SessionLookup` from the orchestrator url/token when none is passed.
+
 ## 2026-11-02 - sse stream
 
 - `GET /stream` (`api/stream.py`) is mounted on the web app only; the service app has no route and no hub. Events are `task_changed` with data `{"key": "T-5"}` and nothing else. `app.state.hub` is a `TaskChangeHub`: one LISTEN connection (agents-common `listen`, which reconnects) fans task ids out to subscribers; each subscriber holds a set of ids, so a slow client coalesces instead of growing a queue or being dropped.
