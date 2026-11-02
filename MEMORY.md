@@ -2,6 +2,11 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-02 - todo checklist
+
+- Todo edits (`PUT /tasks/{key}/todo`, `PATCH /tasks/{key}/todo/{item_id}`) follow the comment rule: they touch `updated_at` (which also row-locks the task), log `todo_replaced` {count} / `todo_updated` {item_id, fields}, NOTIFY, never bump `version` (so they cannot make a title/body editor stale) and never create a notice. PUT deletes and reinserts, so item ids change on every replace; PATCH only addresses ids from the latest read and answers 404 for an item of another task.
+- `api/tasks.py` helpers (`task_id_of`, `pool_of`, `load_one`) are module level now so `api/todos.py` reuses them; its router is mounted on both apps like the tasks router. Text is one line (no CR/LF), 1-200 chars; max 100 items.
+
 ## 2026-11-02 - tasks api
 
 - Both apps mount the same router (`api/tasks.build_router(actor_dep)`); only the actor dependency differs. Do not add `from __future__ import annotations` to it: FastAPI cannot resolve the locally built `Annotated` alias and turns `actor` into a required query param (every route 422s).

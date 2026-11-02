@@ -55,3 +55,29 @@ class TaskPatch(_Labelled):
 
 class CommentCreate(_Strict):
     body: str = Field(min_length=1)
+
+
+TodoStatus = Literal["todo", "inprogress", "done"]
+TodoText = Field(min_length=1, max_length=200, pattern=r"^[^\r\n]*$")
+
+
+class TodoItemIn(_Strict):
+    text: str = TodoText
+    status: TodoStatus = "todo"
+
+
+class TodoReplace(_Strict):
+    items: list[TodoItemIn] = Field(max_length=100)
+
+
+class TodoPatch(_Strict):
+    text: str | None = Field(default=None, min_length=1, max_length=200, pattern=r"^[^\r\n]*$")
+    status: TodoStatus | None = None
+
+    @model_validator(mode="after")
+    def _something(self) -> Self:
+        if not self.model_fields_set:
+            raise ValueError("no fields to change")
+        if any(getattr(self, f) is None for f in self.model_fields_set):
+            raise ValueError("text and status cannot be null")
+        return self

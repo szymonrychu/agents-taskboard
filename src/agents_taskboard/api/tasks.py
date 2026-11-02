@@ -17,11 +17,29 @@ from agents_taskboard.settings import Settings
 MAX_LIMIT = 200
 
 
-def _task_id(key: str) -> int:
+def task_id_of(key: str) -> int:
     task_id = repo.parse_key(key)
     if task_id is None:
         raise ApiError(404, "not_found", f"no task {key}")
     return task_id
+
+
+def pool_of(request: Request) -> AsyncConnectionPool:
+    return request.app.state.pool
+
+
+def public_url(request: Request) -> str:
+    settings: Settings = request.app.state.settings
+    return settings.public_base_url
+
+
+async def load_one(request: Request, task_id: int) -> dict[str, Any]:
+    """The full task JSON, or 404."""
+    async with pool_of(request).connection() as conn:
+        found = await repo.load_tasks(conn, [task_id], public_url(request))
+    if not found:
+        raise ApiError(404, "not_found", f"no task T-{task_id}")
+    return found[0]
 
 
 def _resolve_assignee(body: TaskCreate | TaskPatch, actor: Actor) -> tuple[bool, str | None]:
@@ -36,20 +54,6 @@ def _resolve_assignee(body: TaskCreate | TaskPatch, actor: Actor) -> tuple[bool,
 def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
     router = APIRouter()
     ActorDep = Annotated[Actor, Depends(actor_dep)]
-
-    def pool_of(request: Request) -> AsyncConnectionPool:
-        return request.app.state.pool
-
-    def public_url(request: Request) -> str:
-        settings: Settings = request.app.state.settings
-        return settings.public_base_url
-
-    async def one(request: Request, task_id: int) -> dict[str, Any]:
-        async with pool_of(request).connection() as conn:
-            found = await repo.load_tasks(conn, [task_id], public_url(request))
-        if not found:
-            raise ApiError(404, "not_found", f"no task T-{task_id}")
-        return found[0]
 
     @router.post("/tasks", status_code=201)
     async def create_task(
@@ -69,7 +73,7 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
             task_id, created = await repo.create_task(conn, actor, new)
         if not created:
             response.status_code = 200
-        return await one(request, task_id)
+        return await load_one(request, task_id)
 
     @router.get("/tasks")
     async def list_tasks(
@@ -111,13 +115,13 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
 
     @router.get("/tasks/{key}")
     async def get_task(key: str, request: Request, actor: ActorDep) -> dict[str, Any]:
-        return await one(request, _task_id(key))
+        return await load_one(request, task_id_of(key))
 
     @router.patch("/tasks/{key}")
     async def patch_task(
         key: str, body: TaskPatch, request: Request, actor: ActorDep
     ) -> dict[str, Any]:
-        task_id = _task_id(key)
+        task_id = task_id_of(key)
         changes: dict[str, Any] = {}
         for field in ("title", "body", "status", "labels"):
             if field in body.model_fields_set:
@@ -137,18 +141,18 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
             raise ApiError(404, "not_found", f"no task {key}") from None
         except repo.StaleVersion:
             raise ApiError(412, "stale_version", "task changed since it was read") from None
-        return await one(request, task_id)
+        return await load_one(request, task_id)
 
     @router.post("/tasks/{key}/comments", status_code=201)
     async def add_comment(
         key: str, body: CommentCreate, request: Request, actor: ActorDep
     ) -> dict[str, Any]:
-        task_id = _task_id(key)
+        task_id = task_id_of(key)
         try:
             async with pool_of(request).connection() as conn:
                 await repo.add_comment(conn, actor, task_id, body.body)
         except repo.NotFound:
             raise ApiError(404, "not_found", f"no task {key}") from None
-        return await one(request, task_id)
+        return await load_one(request, task_id)
 
     return router
