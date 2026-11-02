@@ -2,6 +2,13 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-02 - sse stream
+
+- `GET /stream` (`api/stream.py`) is mounted on the web app only; the service app has no route and no hub. Events are `task_changed` with data `{"key": "T-5"}` and nothing else. `app.state.hub` is a `TaskChangeHub`: one LISTEN connection (agents-common `listen`, which reconnects) fans task ids out to subscribers; each subscriber holds a set of ids, so a slow client coalesces instead of growing a queue or being dropped.
+- Polling fallback (every 5 s, `create_web_app(stream_poll_seconds=...)`) uses an id cursor over `events` (every mutation appends an event), not `updated_at`: it starts at `max(events.id)` and reports tasks with newer events that no NOTIFY announced since the last poll. A NOTIFY races the poll, so a duplicate `task_changed` for one task is possible and harmless (clients refetch).
+- The hub starts lazily with the first subscriber, stops (cancels listener and poller) when the last one leaves, and `stop()` runs in the web app lifespan shutdown. The 15 s keepalive comment is FastAPI's own SSE ping (`: ping`), not ours.
+- Tests serve the app through real uvicorn: `httpx.ASGITransport` buffers the whole response and cannot read an SSE stream.
+
 ## 2026-11-02 - notifier
 
 - agents-common v0.7.0 names: `OrchestratorClient.post_message(session_id, text)` has NO `lane` parameter and the orchestrator messages API takes only `{"text"}`; a posted message is the regular lane by default, so the notifier calls it without a lane (the briefed `lane="regular"` does not exist). `advisory_singleton(pool, key)` and `FakeOrchestrator` (`agents_common.fake_orchestrator`, `fail_next("post_message", status)`) match the brief.

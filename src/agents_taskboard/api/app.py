@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
+from agents_common.db import listen
 from agents_common.service_gate import EXEMPT_PATHS, ServiceTokenGate
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -17,6 +20,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from agents_taskboard.api.actors import actor_from_service, actor_from_web
 from agents_taskboard.api.decisions import build_router as build_decision_router
 from agents_taskboard.api.errors import ApiError, error_response
+from agents_taskboard.api.stream import DEFAULT_POLL_SECONDS, ListenFn, TaskChangeHub
+from agents_taskboard.api.stream import build_router as build_stream_router
 from agents_taskboard.api.tasks import build_router
 from agents_taskboard.api.todos import build_router as build_todo_router
 from agents_taskboard.settings import Settings
@@ -98,9 +103,28 @@ def _base_app(settings: Settings, pool: AsyncConnectionPool, title: str) -> Fast
     return app
 
 
-def create_web_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI:
-    """The user-facing app: source allowlist, no bearer, the answer route lives here."""
+def create_web_app(
+    settings: Settings,
+    pool: AsyncConnectionPool,
+    stream_poll_seconds: float = DEFAULT_POLL_SECONDS,
+    listen_fn: ListenFn = listen,
+) -> FastAPI:
+    """The user-facing app: source allowlist, no bearer, the answer route and the SSE stream
+    live here."""
     app = _base_app(settings, pool, "agents-taskboard")
+    app.state.hub = TaskChangeHub(
+        settings.database_url.get_secret_value(), pool, stream_poll_seconds, listen_fn
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            await app.state.hub.stop()
+
+    app.router.lifespan_context = lifespan
+    app.include_router(build_stream_router(), prefix=PREFIX)
     app.include_router(build_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_todo_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_decision_router(actor_from_web, answerable=True), prefix=PREFIX)
