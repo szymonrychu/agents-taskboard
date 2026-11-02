@@ -14,7 +14,9 @@ from psycopg_pool import AsyncConnectionPool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from agents_taskboard.api.actors import actor_from_service, actor_from_web
 from agents_taskboard.api.errors import ApiError, error_response
+from agents_taskboard.api.tasks import build_router
 from agents_taskboard.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -97,6 +99,7 @@ def _base_app(settings: Settings, pool: AsyncConnectionPool, title: str) -> Fast
 def create_web_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI:
     """The user-facing app: source allowlist, no bearer, the answer route lives here."""
     app = _base_app(settings, pool, "agents-taskboard")
+    app.include_router(build_router(actor_from_web), prefix=PREFIX)
     app.add_middleware(SourceAllowlist, networks=settings.api_networks())
     return app
 
@@ -104,5 +107,6 @@ def create_web_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI:
 def create_service_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI:
     """The relay-facing app: bearer gate, agent identity from forwarded headers, no answer route."""
     app = _base_app(settings, pool, "agents-taskboard-service")
+    app.include_router(build_router(actor_from_service), prefix=PREFIX)
     app.add_middleware(ServiceTokenGate, tokens=[settings.relay_token.get_secret_value()])
     return app
