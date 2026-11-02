@@ -2,6 +2,10 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-02 - label notice skips the actor; malformed orchestrator answers
+
+The label-match notifier skips the session that made the change (`events.actor_session`), not the task creator: a user adding a label to an agent-created task must notify the creator if it matches, and an agent must not be told about its own edit. `SessionLookup.live_session_ids` wraps a malformed 200 (bad JSON, wrong shapes, missing `id`) as `OrchestratorUnavailable`, so the notifier loop logs and backs off instead of crash-looping, which would also have stopped decision notices.
+
 ## 2026-11-02 packaging
 
 - The CLI had no http commands until packaging: `serve-web` (`TASKBOARD_HTTP_PORT`, 8000) and `serve-service` (`TASKBOARD_SERVICE_PORT`, chart sets 8002) in `runtime.py`, one uvicorn per process, pattern of agents-schedule `runtime.py` (no uvicorn signal handling, `proxy_headers=False` so the allowlist sees the socket peer). One process per listener keeps the web allowlist and the relay bearer gate on separate Deployments and Services.
