@@ -18,7 +18,7 @@ from psycopg.types.json import Jsonb
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.db.events import append_event, notify_changed
 from agents_taskboard.db.notices import enqueue_decision_notice
-from agents_taskboard.db.tasks import NotFound
+from agents_taskboard.db.tasks import NotFound, task_key, task_url
 
 USER = Actor(kind="user")
 _COLUMNS = (
@@ -43,10 +43,12 @@ class Decision:
     created_at: datetime
     answered_at: datetime | None
 
-    def as_json(self) -> dict[str, Any]:
+    def as_json(self, public_url: str) -> dict[str, Any]:
         out = asdict(self)
         out.pop("client_key")
-        out["task_key"] = f"T-{out.pop('task_id')}"
+        key = task_key(out.pop("task_id"))
+        out["task_key"] = key
+        out["url"] = task_url(public_url, key)
         return out
 
 

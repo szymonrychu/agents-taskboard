@@ -305,3 +305,22 @@ async def test_answer_notifies(service_client, web_client, db_url):
             async for n in listener.notifies(timeout=2, stop_after=1):
                 received.append(n.payload)
     assert received == [key[2:]]
+
+
+async def test_decision_responses_carry_task_url(service_client, web_client):
+    task = await create(service_client)
+    key = task["key"]
+    expected = f"https://tasks.example.test/tasks/{key}"
+    asked = await ask(service_client, key)
+    assert asked.json()["url"] == expected and asked.json()["task_key"] == key
+    replay = await ask(service_client, key)
+    assert replay.json()["url"] == expected
+    did = asked.json()["id"]
+    answered = await web_client.post(dec_url(key, did, "answer"), json={"choice": 0})
+    assert answered.json()["url"] == expected
+    other = await ask(service_client, key, question="again?")
+    withdrawn = await service_client.post(
+        dec_url(key, other.json()["id"], "withdraw"), headers=agent()
+    )
+    assert withdrawn.status_code == 200
+    assert withdrawn.json()["url"] == expected

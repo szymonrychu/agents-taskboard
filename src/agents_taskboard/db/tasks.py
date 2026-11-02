@@ -49,6 +49,14 @@ def parse_key(key: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def task_key(task_id: int) -> str:
+    return f"T-{task_id}"
+
+
+def task_url(public_url: str, key: str) -> str:
+    return f"{public_url}/tasks/{key}"
+
+
 async def create_task(
     conn: psycopg.AsyncConnection, actor: Actor, new: NewTask
 ) -> tuple[int, bool]:
@@ -316,7 +324,7 @@ async def load_tasks(
             if d["status"] == "open":
                 open_count += 1
                 waiting.setdefault(d["asking_session"], d["asking_slug"])
-        key = f"T-{task_id}"
+        key = task_key(task_id)
         task.pop("id")
         out.append(
             {
@@ -331,7 +339,7 @@ async def load_tasks(
                 "decisions": decisions,
                 "comments": children["comments"].get(task_id, []),
                 "events": children["events"].get(task_id, []),
-                "url": f"{public_url}/tasks/{key}",
+                "url": task_url(public_url, key),
             }
         )
     return out

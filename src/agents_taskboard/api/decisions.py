@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.api.errors import ApiError
 from agents_taskboard.api.schemas import DecisionAnswer, DecisionCreate
-from agents_taskboard.api.tasks import pool_of, task_id_of
+from agents_taskboard.api.tasks import pool_of, public_url, task_id_of
 from agents_taskboard.db import decisions as repo
 from agents_taskboard.db import tasks as tasks_repo
 
@@ -35,7 +35,7 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
             raise ApiError(404, "not_found", f"no task {key}") from None
         if not created:
             response.status_code = 200
-        return decision.as_json()
+        return decision.as_json(public_url(request))
 
     @router.post("/tasks/{key}/decisions/{decision_id}/withdraw")
     async def withdraw(
@@ -45,7 +45,7 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
         async with pool_of(request).connection() as conn:
             decision = await repo.withdraw_decision(conn, actor, decision_id, task_id)
             if decision is not None:
-                return decision.as_json()
+                return decision.as_json(public_url(request))
             current = await repo.get_decision(conn, decision_id)
         if current is None or current.task_id != task_id:
             raise ApiError(404, "not_found", f"no decision {decision_id} on {key}")
@@ -76,6 +76,6 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
                 decision = await repo.answer_decision(conn, decision_id, given, body.note)
             if decision is None:
                 raise ApiError(409, "already_answered", f"decision is already {current.status}")
-            return decision.as_json()
+            return decision.as_json(public_url(request))
 
     return router
