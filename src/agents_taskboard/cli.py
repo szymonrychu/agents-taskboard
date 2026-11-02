@@ -81,7 +81,21 @@ def _notifier(settings: Settings) -> int:
     return run(settings)
 
 
+def _serve_web(settings: Settings) -> int:
+    from agents_taskboard import runtime
+
+    return runtime.web_main(settings)
+
+
+def _serve_service(settings: Settings) -> int:
+    from agents_taskboard import runtime
+
+    return runtime.service_main(settings)
+
+
 register("migrate", _configured(_migrate), "apply the schema migrations and exit")
+register("serve-web", _configured(_serve_web), "serve the user-facing http api")
+register("serve-service", _configured(_serve_service), "serve the orchestrator relay http api")
 register("notifier", _configured(_notifier), "send pending notices to their sessions")
 
 

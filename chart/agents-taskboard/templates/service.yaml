@@ -1,0 +1,20 @@
+{{- range $component := list "web" "service" }}
+{{- $cfg := index $.Values.components $component }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agents-taskboard.fullname" $ }}-{{ $component }}
+  labels:
+    {{- include "agents-taskboard.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  type: {{ $.Values.service.type }}
+  ports:
+    - name: http
+      port: {{ if eq $component "web" }}{{ $.Values.service.port }}{{ else }}{{ $cfg.port }}{{ end }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "agents-taskboard.componentLabels" (dict "context" $ "component" $component) | nindent 4 }}
+{{- end }}

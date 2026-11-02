@@ -2,6 +2,14 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-02 packaging
+
+- The CLI had no http commands until packaging: `serve-web` (`TASKBOARD_HTTP_PORT`, 8000) and `serve-service` (`TASKBOARD_SERVICE_PORT`, chart sets 8002) in `runtime.py`, one uvicorn per process, pattern of agents-schedule `runtime.py` (no uvicorn signal handling, `proxy_headers=False` so the allowlist sees the socket peer). One process per listener keeps the web allowlist and the relay bearer gate on separate Deployments and Services.
+- Chart: three Deployments (`web`, `service`, `notifier`), each with a `migrate` init container (migrations are idempotent under the migrator lock). The notifier is one replica with `Recreate`. Only the web Service is routed by the ingress (`/taskboard` on `lab.szymonrichert.pl`); the relay Service stays in the cluster. oauth2-proxy admission is `components.web.podAnnotations`; the web listener allows `127.0.0.1/32` only (`allowedCidrs`). The three secret values (database URL, orchestrator token, relay token) are env `secretKeyRef`s either to the chart's own Secret (when given as values) or to a named existing Secret and key; setting both for one value, or neither, fails the render.
+- `publicUrl` (-> `TASKBOARD_PUBLIC_BASE_URL`) is the agents-web base, not the API: notices link to `<publicUrl>/tasks/<key>`. The ingress `/taskboard` is the API only.
+- `openapi.json` is the web app (it has the answer route and the stream); the service app is a subset checked by a test. Error responses are rewritten to the service's `{"error": {...}}` shape with the statuses per route in `api/openapi.py` (hand-kept table, like agents-schedule).
+- CI mirrors agents-usage: lint, test (testcontainers postgres:18), chart, images (build, smoke, uid and no-dev-deps checks, push of `:<sha7>` on main), chart-publish, then `release` last (image retag, then the git tag as the final step). Repo needs the secrets `HARBOR_USERNAME` and `HARBOR_PASSWORD` (also needed by agents-usage) before the first main run.
+
 ## 2026-11-02 label-match notifier
 
 - The scanner runs inside the notifier loop (same advisory singleton), before each send: `scan_label_events(conn, lookup)` locks one unscanned `label_added` event (`FOR UPDATE OF e SKIP LOCKED`), asks the orchestrator once with all added labels (`GET /api/v1/sessions?label=..` repeated, any match), inserts `reason='label'` notices `ON CONFLICT DO NOTHING` (unique `(task_id, session_id)` makes it once per task and session, ever), skips `tasks.created_by_session`, then a guarded `UPDATE events SET scanned_at`. One transaction, so a failed lookup rolls back and the event stays unscanned.
