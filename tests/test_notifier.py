@@ -8,7 +8,7 @@ from agents_common.orchestrator import OrchestratorClient
 from test_api_tasks import TASKS, agent, create
 
 from agents_taskboard.db.notices import claim_notice
-from agents_taskboard.notifier import notice_text, run_notifier
+from agents_taskboard.notifier import notice_text, run_notifier, send_next
 from agents_taskboard.settings import Settings
 
 PUBLIC = "https://tasks.example.test"
@@ -172,3 +172,49 @@ async def test_unknown_session_404_marks_sent_not_loop(
     await notice(service_client, conn, str(uuid.uuid4()))
     await run_until(fast, pool, client, lambda: statuses(conn) == ["sent"])
     assert len([r for r in fake.requests if r.method == "POST"]) == 1
+
+
+async def test_failing_notice_does_not_block_later_session(
+    service_client, settings, pool, conn, fake, client
+):
+    a, b = add_session(fake), add_session(fake)
+    await notice(service_client, conn, a)
+    await notice(service_client, conn, b)
+    fake.fail_next("post_message", 500)
+    args = (pool, client, PUBLIC, 5.0, 60.0)
+    assert await send_next(*args) is False
+    assert await send_next(*args) is True
+    assert [m["session_id"] for m in fake.messages.values()] == [b]
+    assert statuses(conn) == ["pending", "sent"]
+    assert await send_next(*args) is None
+
+
+async def test_failed_row_gets_attempt_and_future_schedule_then_retries(
+    service_client, pool, conn, fake, client
+):
+    sid = add_session(fake)
+    await notice(service_client, conn, sid)
+    fake.fail_next("post_message", 500)
+    args = (pool, client, PUBLIC, 5.0, 60.0)
+    assert await send_next(*args) is False
+    attempts, delay = conn.execute(
+        "SELECT attempts, extract(epoch FROM next_attempt_at - now()) FROM notices"
+    ).fetchone()
+    assert attempts == 1
+    assert 0 < float(delay) <= 5.0
+    assert await send_next(*args) is None
+    conn.execute("UPDATE notices SET next_attempt_at = now()")
+    assert await send_next(*args) is True
+    assert statuses(conn) == ["sent"]
+
+
+async def test_backoff_is_capped(service_client, pool, conn, fake, client):
+    sid = add_session(fake)
+    await notice(service_client, conn, sid)
+    conn.execute("UPDATE notices SET attempts = 5000")
+    fake.fail_next("post_message", 500)
+    assert await send_next(pool, client, PUBLIC, 5.0, 60.0) is False
+    (delay,) = conn.execute(
+        "SELECT extract(epoch FROM next_attempt_at - now()) FROM notices"
+    ).fetchone()
+    assert 59 < float(delay) <= 60

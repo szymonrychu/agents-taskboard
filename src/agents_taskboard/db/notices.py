@@ -29,10 +29,11 @@ class Notice:
 
 
 async def claim_notice(conn: psycopg.AsyncConnection) -> Notice | None:
-    """Lock the oldest pending notice no other notifier holds. The caller keeps the transaction
-    open across the send and `mark_sent`, so a second notifier skips the row meanwhile."""
+    """Lock the oldest due pending notice no other notifier holds. The caller keeps the
+    transaction open across the send and `mark_sent`, so a second notifier skips the row."""
     cur = await conn.execute(
-        "SELECT id, task_id, session_id, reason FROM notices WHERE status = 'pending'"
+        "SELECT id, task_id, session_id, reason FROM notices"
+        " WHERE status = 'pending' AND next_attempt_at <= now()"
         " ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED"
     )
     row = await cur.fetchone()
@@ -46,3 +47,17 @@ async def mark_sent(conn: psycopg.AsyncConnection, notice_id: int) -> bool:
         (notice_id,),
     )
     return cur.rowcount == 1
+
+
+async def schedule_retry(
+    conn: psycopg.AsyncConnection, notice_id: int, base_seconds: float, max_seconds: float
+) -> None:
+    """After a failed send: count the attempt and push the next one out by base * 2^attempts
+    seconds, capped at max_seconds. Only a still-pending row changes."""
+    await conn.execute(
+        "UPDATE notices SET attempts = attempts + 1,"
+        " next_attempt_at = now() + make_interval(secs =>"
+        "   LEAST(%s::float8 * power(2, LEAST(attempts, 30)), %s::float8))"
+        " WHERE id = %s AND status = 'pending'",
+        (base_seconds, max_seconds, notice_id),
+    )

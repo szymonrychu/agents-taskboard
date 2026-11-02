@@ -89,7 +89,9 @@ CREATE TABLE notices (
     reason      text NOT NULL CHECK (reason IN ('decision', 'label')),
     status      text NOT NULL CHECK (status IN ('pending', 'sent')),
     created_at  timestamptz NOT NULL DEFAULT now(),
-    sent_at     timestamptz
+    sent_at     timestamptz,
+    attempts    integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE UNIQUE INDEX notices_one_pending_idx
