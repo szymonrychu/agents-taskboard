@@ -2,6 +2,13 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-02 - notifier
+
+- agents-common v0.7.0 names: `OrchestratorClient.post_message(session_id, text)` has NO `lane` parameter and the orchestrator messages API takes only `{"text"}`; a posted message is the regular lane by default, so the notifier calls it without a lane (the briefed `lane="regular"` does not exist). `advisory_singleton(pool, key)` and `FakeOrchestrator` (`agents_common.fake_orchestrator`, `fail_next("post_message", status)`) match the brief.
+- The notifier claims one row with `SELECT ... FOR UPDATE SKIP LOCKED` and holds that transaction across the send and `mark_sent` (leader ruling), so a second notifier skips the row. Delivery is at-least-once: a crash between the send and the commit re-sends after restart (rare duplicate); a pending row is never lost. In production the notifier also runs under the advisory lock `agents-taskboard-notifier`, so one instance sends at a time.
+- A 404 from the orchestrator (session gone) ends the notice (marked sent); any other error or an unreachable orchestrator leaves it pending and retries with exponential backoff (`TASKBOARD_NOTIFIER_POLL_SECONDS` 5 doubling up to `TASKBOARD_NOTIFIER_BACKOFF_MAX_SECONDS` 60). A NOTIFY wakes the idle loop but never cuts a backoff short. The oldest failing row is retried first, so one persistently failing row delays later ones (only 404 ends a notice; a 409 `session_deleting` becomes 404 once the session row is gone).
+- The text is only `notice_text(task_key, public_url)`; the notifier never reads title or body.
+
 ## 2026-11-02 - decisions and notice outbox
 
 - Ask is agent-only (403 `agent_required` for a user) on both apps; answer is built only when `build_router(..., answerable=True)`, which only the web app passes, so the service app has no route and no OpenAPI path. Withdraw is on both apps: 404 unknown decision or other task, 403 not the asking session (users included), 409 `not_open` when not open.

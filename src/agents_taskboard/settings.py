@@ -20,6 +20,8 @@ class Settings(BaseServiceSettings):
     service_port: int = Field(8001, ge=1, le=65535)
     public_base_url: str
     relay_token: SecretStr = Field(repr=False)
+    notifier_poll_seconds: float = Field(5.0, gt=0)
+    notifier_backoff_max_seconds: float = Field(60.0, gt=0)
 
     @field_validator("allowed_cidrs")
     @classmethod

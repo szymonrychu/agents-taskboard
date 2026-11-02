@@ -75,7 +75,14 @@ def _migrate(settings: Settings) -> int:
     return 0
 
 
+def _notifier(settings: Settings) -> int:
+    from agents_taskboard.notifier import main as run
+
+    return run(settings)
+
+
 register("migrate", _configured(_migrate), "apply the schema migrations and exit")
+register("notifier", _configured(_notifier), "send pending notices to their sessions")
 
 
 if __name__ == "__main__":

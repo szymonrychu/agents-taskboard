@@ -32,3 +32,8 @@ def test_migrate_applies_and_prints_names(monkeypatch, empty_db_url, capsys):
     assert capsys.readouterr().out.split() == ["0001_taskboard.sql"]
     assert main(["migrate"]) == 0
     assert capsys.readouterr().out == ""
+
+
+def test_notifier_with_bad_config_exits_78(capsys):
+    assert main(["notifier"]) == EXIT_CONFIG
+    assert "TASKBOARD_DATABASE_URL" in capsys.readouterr().err
