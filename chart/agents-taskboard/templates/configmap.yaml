@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agents-taskboard.fullname" . }}-settings
+  labels:
+    {{- include "agents-taskboard.labels" . | nindent 4 }}
+data:
+  {{- include "agents-taskboard.config" . | nindent 2 }}

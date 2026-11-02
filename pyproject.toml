@@ -2,11 +2,31 @@
 name = "agents-taskboard"
 version = "0.1.0"
 description = "Tasks, decisions, todo, comments and history for users and agents"
+readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "agents-common @ git+https://github.com/szymonrychu/agents-common@v0.7.0",
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "psycopg[binary,pool]",
+    "pydantic",
+    "pydantic-settings",
+]
+
+[project.scripts]
+taskboard = "agents_taskboard.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "ruff"]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "testcontainers[postgres]",
+    "ruff",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [build-system]
 requires = ["hatchling"]
@@ -16,5 +36,14 @@ build-backend = "hatchling.build"
 packages = ["src/agents_taskboard"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
-testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
