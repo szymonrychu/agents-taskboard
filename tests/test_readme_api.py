@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi.routing import APIRoute
 
-from agents_taskboard.api.app import PREFIX, create_service_app, create_web_app
+from agents_taskboard.api.app import PREFIX, create_delegate_app, create_service_app, create_web_app
 from agents_taskboard.settings import Settings
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -72,9 +72,18 @@ def test_service_routes_are_a_documented_subset():
     }
 
 
+def test_delegate_routes_are_the_web_routes_and_documented():
+    delegate = routes_of(create_delegate_app(SETTINGS, None))  # type: ignore[arg-type]
+    assert delegate == readme_routes()
+    api = section("API")
+    assert "delegate listener" in api
+    config = section("Configuration")
+    assert "`TASKBOARD_DELEGATE_TOKENS`" in config and "`TASKBOARD_DELEGATE_PORT`" in config
+
+
 def test_readme_documents_commands_and_settings():
     commands = section("Commands")
-    for name in ("migrate", "serve-web", "serve-service", "notifier"):
+    for name in ("migrate", "serve-web", "serve-service", "serve-delegate", "notifier"):
         assert f"`taskboard {name}`" in commands
     config = section("Configuration")
     for name in Settings.model_fields:

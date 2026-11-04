@@ -23,6 +23,7 @@ The `taskboard` entry point (`uv run taskboard <command>`):
 - `taskboard migrate` - apply the schema migrations to the service's own database and exit.
 - `taskboard serve-web` - serve the user-facing api on `TASKBOARD_HTTP_PORT` (source allowlist, answer route, SSE stream).
 - `taskboard serve-service` - serve the relay api on `TASKBOARD_SERVICE_PORT` (bearer token, agent identity from forwarded headers, no answer route, no stream).
+- `taskboard serve-delegate` - serve the delegate listener on `TASKBOARD_DELEGATE_PORT` (cluster-only, bearer token list, acts as a user; exits 78 naming `TASKBOARD_DELEGATE_TOKENS` when the list is empty).
 - `taskboard notifier` - send pending notices to their sessions; one instance sends at a time (advisory lock).
 
 ## Configuration
@@ -37,6 +38,8 @@ Every process reads one validated `TASKBOARD_*` environment. A bad or missing va
 | `TASKBOARD_ORCHESTRATOR_TOKEN_FILE` | - | path of a file holding the token |
 | `TASKBOARD_PUBLIC_BASE_URL` | required | absolute http(s) base of the task links in notices |
 | `TASKBOARD_RELAY_TOKEN` | required | bearer token of the service listener (the orchestrator relay sends it) |
+| `TASKBOARD_DELEGATE_TOKENS` | empty | comma-separated bearer tokens of the delegate listener; each must differ from `TASKBOARD_RELAY_TOKEN`; `serve-delegate` refuses to start with none |
+| `TASKBOARD_DELEGATE_PORT` | `8003` | delegate listener port (1..65535, different from the web and service ports) |
 | `TASKBOARD_ALLOWED_CIDRS` | `127.0.0.1/32` | comma-separated CIDRs allowed on the web listener (the oauth2-proxy sidecar or a port-forward) |
 | `TASKBOARD_HTTP_HOST` | `0.0.0.0` | bind address of both listeners |
 | `TASKBOARD_HTTP_PORT` | `8000` | web listener port |
@@ -48,7 +51,7 @@ Every process reads one validated `TASKBOARD_*` environment. A bad or missing va
 
 ## API
 
-Base path `/taskboard/api/v1`. JSON in and out. The web listener refuses any socket peer outside `TASKBOARD_ALLOWED_CIDRS` with `403 forbidden` (forwarding headers are never read); the service listener answers `401 unauthorized` unless `Authorization: Bearer <relay token>` matches and takes the acting agent from the `X-Orch-Session` (required, `400 actor_required`) and `X-Orch-Slug` headers. `GET /healthz` and `GET /readyz` (`503 not_ready` when the database is unreachable) are outside the base path and exempt from both gates. The service listener serves every route below except the answer route and the stream. The machine-readable contract of the web listener is `openapi.json`, regenerated with `uv run python -m agents_taskboard.api.openapi > openapi.json`; a test fails when it drifts from the app or when a route is missing from this section.
+Base path `/taskboard/api/v1`. JSON in and out. The web listener refuses any socket peer outside `TASKBOARD_ALLOWED_CIDRS` with `403 forbidden` (forwarding headers are never read); the service listener answers `401 unauthorized` unless `Authorization: Bearer <relay token>` matches and takes the acting agent from the `X-Orch-Session` (required, `400 actor_required`) and `X-Orch-Slug` headers. `GET /healthz` and `GET /readyz` (`503 not_ready` when the database is unreachable) are outside the base path and exempt from both gates. The service listener serves every route below except the answer route and the stream. The delegate listener serves exactly the routes of the web listener (including the answer route and the stream) as the user actor, behind `Authorization: Bearer <delegate token>` (`401 unauthorized` otherwise; the relay token does not open it); it has no ingress path and no oauth2 admission, and ask and withdraw still refuse a user (`403 agent_required`). `agents-app-connector` is its client. Its error statuses follow `openapi.json` except `401` replaces `403 forbidden`. The machine-readable contract of the web listener is `openapi.json`, regenerated with `uv run python -m agents_taskboard.api.openapi > openapi.json`; a test fails when it drifts from the app or when a route is missing from this section.
 
 Task keys look like `T-5`. Statuses: `idea`, `open`, `in_progress`, `done`, `dropped`; kinds: `idea`, `task`. A task carries a `version`; `PATCH` needs it and answers `412 stale_version` when the task changed. Labels are normalised (trimmed, lowercase, `[a-z0-9-_.:]`, at most 40 characters, at most 20).
 
@@ -106,4 +109,4 @@ A notice wakes a session through the orchestrator messages api. It is created wh
 
 ## Deployment
 
-The image is `harbor.szymonrichert.pl/containers/agents-taskboard` and the chart `chart/agents-taskboard` (three Deployments: `web`, `service`, `notifier`, each with a `migrate` init container). CI builds, tests and publishes both; the `release` job on main tags the image and the repository `vX.Y.Z` from the conventional commits since the last tag (`scripts/next_version.py`). The ingress routes only `/taskboard` to the web service; the relay api stays in the cluster.
+The image is `harbor.szymonrichert.pl/containers/agents-taskboard` and the chart `chart/agents-taskboard` (three Deployments: `web`, `service`, `notifier`, plus an optional fourth `delegate` that renders only when `delegateTokens` or `delegateExistingSecret` is set, with its own `<release>-delegate` Service on port 8003 and never an ingress path; every Deployment has a `migrate` init container). CI builds, tests and publishes both; the `release` job on main tags the image and the repository `vX.Y.Z` from the conventional commits since the last tag (`scripts/next_version.py`). The ingress routes only `/taskboard` to the web service; the relay api stays in the cluster.
