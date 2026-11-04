@@ -54,3 +54,44 @@ def test_errors_name_each_variable(monkeypatch):
         "TASKBOARD_PUBLIC_BASE_URL",
         "TASKBOARD_RELAY_TOKEN",
     }
+
+
+def test_delegate_tokens_default_empty(monkeypatch):
+    set_env(monkeypatch)
+    assert load_settings().delegate_tokens == []
+
+
+def test_delegate_tokens_parsed_from_csv(monkeypatch):
+    set_env(monkeypatch, TASKBOARD_DELEGATE_TOKENS="a, ,b,")
+    s = load_settings()
+    assert [t.get_secret_value() for t in s.delegate_tokens] == ["a", "b"]
+    assert "a," not in repr(s) and "'a'" not in repr(s)
+
+
+def test_delegate_token_equal_to_relay_token_is_rejected(monkeypatch):
+    set_env(monkeypatch, TASKBOARD_DELEGATE_TOKENS="x,relay-secret")
+    with pytest.raises(SettingsError) as exc:
+        load_settings()
+    assert set(exc.value.problems) == {"TASKBOARD_DELEGATE_TOKENS"}
+    assert "relay-secret" not in str(exc.value)
+
+
+def test_delegate_port_defaults_8003(monkeypatch):
+    set_env(monkeypatch)
+    assert load_settings().delegate_port == 8003
+
+
+@pytest.mark.parametrize("env", ["TASKBOARD_HTTP_PORT", "TASKBOARD_SERVICE_PORT"])
+def test_delegate_port_must_differ_from_http_and_service_port(monkeypatch, env):
+    set_env(monkeypatch, **{env: "9100", "TASKBOARD_DELEGATE_PORT": "9100"})
+    with pytest.raises(SettingsError) as exc:
+        load_settings()
+    assert set(exc.value.problems) == {"TASKBOARD_DELEGATE_PORT"}
+
+
+@pytest.mark.parametrize("value", ["0", "65536"])
+def test_delegate_port_range(monkeypatch, value):
+    set_env(monkeypatch, TASKBOARD_DELEGATE_PORT=value)
+    with pytest.raises(SettingsError) as exc:
+        load_settings()
+    assert set(exc.value.problems) == {"TASKBOARD_DELEGATE_PORT"}
