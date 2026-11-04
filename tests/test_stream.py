@@ -60,9 +60,10 @@ class SSE:
 
 
 @contextlib.asynccontextmanager
-async def open_stream(app, base: str) -> AsyncIterator[SSE]:
+async def open_stream(app, base: str, token: str | None = None) -> AsyncIterator[SSE]:
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     async with (
-        httpx.AsyncClient(base_url=base, timeout=15) as c,
+        httpx.AsyncClient(base_url=base, timeout=15, headers=headers) as c,
         c.stream("GET", STREAM) as resp,
     ):
         assert resp.status_code == 200

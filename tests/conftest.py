@@ -8,11 +8,12 @@ from agents_common.db.pool import open_pool
 from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 
-from agents_taskboard.api.app import create_service_app, create_web_app
+from agents_taskboard.api.app import create_delegate_app, create_service_app, create_web_app
 from agents_taskboard.settings import Settings
 
 PACKAGE = "agents_taskboard"
 RELAY_TOKEN = "relay-secret"
+DELEGATE_TOKEN = "delegate-secret"
 BASE_URL = "http://test"
 
 
@@ -48,6 +49,7 @@ def settings(db_url: str) -> Settings:
         orchestrator_token="t",
         public_base_url="https://tasks.example.test",
         relay_token=RELAY_TOKEN,
+        delegate_tokens=[DELEGATE_TOKEN],
     )
 
 
@@ -77,6 +79,21 @@ async def service_client(
     app = create_service_app(settings, pool)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url=BASE_URL
+    ) as client:
+        client.app = app  # type: ignore[attr-defined]
+        yield client
+
+
+@pytest.fixture
+async def delegate_client(
+    settings: Settings, pool: AsyncConnectionPool
+) -> AsyncIterator[httpx.AsyncClient]:
+    """Bearer-authenticated client of the delegate app; `client.app` is the app."""
+    app = create_delegate_app(settings, pool)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url=BASE_URL,
+        headers={"Authorization": f"Bearer {DELEGATE_TOKEN}"},
     ) as client:
         client.app = app  # type: ignore[attr-defined]
         yield client

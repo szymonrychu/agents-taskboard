@@ -1,11 +1,12 @@
-"""The FastAPI apps: web listener (users, behind the source allowlist) and service listener
-(orchestrator relay, behind the bearer gate). Both share the error shape and probes."""
+"""The FastAPI apps: web listener (users, behind the source allowlist), delegate listener (the
+same user routes behind a delegate bearer gate) and service listener (orchestrator relay,
+behind the relay bearer gate). All share the error shape and probes."""
 
 from __future__ import annotations
 
 import ipaddress
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from agents_common.db import listen
@@ -103,15 +104,17 @@ def _base_app(settings: Settings, pool: AsyncConnectionPool, title: str) -> Fast
     return app
 
 
-def create_web_app(
+def _user_app(
     settings: Settings,
     pool: AsyncConnectionPool,
-    stream_poll_seconds: float = DEFAULT_POLL_SECONDS,
-    listen_fn: ListenFn = listen,
+    title: str,
+    add_gate: Callable[[FastAPI], None],
+    stream_poll_seconds: float,
+    listen_fn: ListenFn,
 ) -> FastAPI:
-    """The user-facing app: source allowlist, no bearer, the answer route and the SSE stream
-    live here."""
-    app = _base_app(settings, pool, "agents-taskboard")
+    """The user-actor app: the SSE stream, tasks, todos and decisions with the answer route.
+    Only the admission gate differs between the web and the delegate listener."""
+    app = _base_app(settings, pool, title)
     app.state.hub = TaskChangeHub(
         settings.database_url.get_secret_value(), pool, stream_poll_seconds, listen_fn
     )
@@ -128,8 +131,41 @@ def create_web_app(
     app.include_router(build_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_todo_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_decision_router(actor_from_web, answerable=True), prefix=PREFIX)
-    app.add_middleware(SourceAllowlist, networks=settings.api_networks())
+    add_gate(app)
     return app
+
+
+def create_web_app(
+    settings: Settings,
+    pool: AsyncConnectionPool,
+    stream_poll_seconds: float = DEFAULT_POLL_SECONDS,
+    listen_fn: ListenFn = listen,
+) -> FastAPI:
+    """The user-facing app: source allowlist, no bearer, the answer route and the SSE stream
+    live here."""
+
+    def gate(app: FastAPI) -> None:
+        app.add_middleware(SourceAllowlist, networks=settings.api_networks())
+
+    return _user_app(settings, pool, "agents-taskboard", gate, stream_poll_seconds, listen_fn)
+
+
+def create_delegate_app(
+    settings: Settings,
+    pool: AsyncConnectionPool,
+    stream_poll_seconds: float = DEFAULT_POLL_SECONDS,
+    listen_fn: ListenFn = listen,
+) -> FastAPI:
+    """The cluster-only delegate app: the web app's routes acting as a user, behind a bearer
+    gate on the delegate token list (never the relay token)."""
+
+    def gate(app: FastAPI) -> None:
+        tokens = [t.get_secret_value() for t in settings.delegate_tokens]
+        app.add_middleware(ServiceTokenGate, tokens=tokens)
+
+    return _user_app(
+        settings, pool, "agents-taskboard-delegate", gate, stream_poll_seconds, listen_fn
+    )
 
 
 def create_service_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI:

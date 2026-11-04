@@ -2,7 +2,8 @@
 
 Redirect stdout to `openapi.json`.
 The web app is the user-facing contract (it includes the answer route; the service app is the
-relay's subset and has none). FastAPI documents a validation error as its own
+relay's subset and has none; the delegate app serves the same routes as the web app, with 401
+instead of 403 as its gate error). FastAPI documents a validation error as its own
 `HTTPValidationError`; this service answers every error with `{"error": {"code", "message"}}`
 (see `errors.py`), so the export replaces the generated error responses with that shape and
 the statuses each route really returns.

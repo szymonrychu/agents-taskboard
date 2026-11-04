@@ -2,10 +2,12 @@
 {{- $image := printf "%s:%s" .Values.image.repository $tag }}
 {{- $settingsSum := include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
 {{- /* The notifier is a singleton (advisory lock): one replica, never two pods at once. */ -}}
-{{- range $component := list "web" "service" "notifier" }}
+{{- $components := list "web" "service" "notifier" }}
+{{- if include "agents-taskboard.delegateEnabled" . }}{{ $components = append $components "delegate" }}{{ end }}
+{{- range $component := $components }}
 {{- $cfg := index $.Values.components $component }}
 {{- $labels := dict "context" $ "component" $component }}
-{{- $args := dict "web" "serve-web" "service" "serve-service" "notifier" "notifier" }}
+{{- $args := dict "web" "serve-web" "service" "serve-service" "delegate" "serve-delegate" "notifier" "notifier" }}
 ---
 apiVersion: apps/v1
 kind: Deployment

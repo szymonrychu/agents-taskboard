@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from agents_taskboard import runtime
-from agents_taskboard.api.app import create_service_app, create_web_app
+from agents_taskboard.api.app import create_delegate_app, create_service_app, create_web_app
 
 
 def free_port() -> int:
@@ -18,6 +18,14 @@ def free_port() -> int:
 
 @pytest.mark.parametrize("factory", [create_web_app, create_service_app])
 async def test_serves_readyz_then_stops(settings, factory):
+    await _serves_readyz_then_stops(settings, factory)
+
+
+async def test_delegate_serves_readyz_then_stops(settings):
+    await _serves_readyz_then_stops(settings, create_delegate_app)
+
+
+async def _serves_readyz_then_stops(settings, factory):
     port = free_port()
     stop = asyncio.Event()
     task = asyncio.create_task(runtime._serve(settings, stop, factory, port))
