@@ -13,6 +13,7 @@ CHART = Path(__file__).resolve().parent.parent / "chart" / "agents-taskboard"
 DB_PASS = "".join(["db", "-", "fixture", "-", "value"])
 ORCH_TOKEN = "".join(["orch", "-", "fixture", "-", "value"])
 RELAY_TOKEN = "".join(["relay", "-", "fixture", "-", "value"])
+DELEGATE_TOKENS = "".join(["dlg", "-", "fixture", "-", "a", ",", "dlg", "-", "fixture", "-", "b"])
 
 BASE = {
     "image": {"tag": "1.2.3"},
@@ -22,6 +23,7 @@ BASE = {
     "relayToken": RELAY_TOKEN,
 }
 COMPONENTS = ("web", "service", "notifier")
+WITH_DELEGATE = {"delegateTokens": DELEGATE_TOKENS}
 
 
 def _merge(a: dict, b: dict) -> dict:
@@ -65,7 +67,7 @@ def env_of(container: dict) -> dict:
     return {e["name"]: e for e in container.get("env", [])}
 
 
-def test_chart_renders_three_components():
+def test_chart_renders_three_components_without_delegate():
     docs = render()
     deps = deployments(docs)
     assert set(deps) == set(COMPONENTS)
@@ -89,6 +91,73 @@ def test_chart_renders_three_components():
     assert set(services) == {"web", "service"}
     assert services["service"]["spec"]["ports"][0]["port"] == 8002
     assert services["web"]["spec"]["ports"][0]["targetPort"] == "http"
+
+
+def test_chart_renders_four_components_with_delegate():
+    docs = render(WITH_DELEGATE)
+    deps = deployments(docs)
+    assert set(deps) == {*COMPONENTS, "delegate"}
+    delegate = deps["delegate"]["spec"]["template"]["spec"]
+    container = delegate["containers"][0]
+    assert container["args"] == ["serve-delegate"]
+    assert container["command"] == ["taskboard"]
+    assert container["ports"][0]["containerPort"] == 8003
+    assert delegate["initContainers"][0]["args"] == ["migrate"]
+    assert deps["delegate"]["spec"]["replicas"] == 1
+    services = {
+        s["metadata"]["labels"]["app.kubernetes.io/component"]: s for s in of_kind(docs, "Service")
+    }
+    assert set(services) == {"web", "service", "delegate"}
+    assert services["delegate"]["metadata"]["name"] == "tb-agents-taskboard-delegate"
+    assert services["delegate"]["spec"]["ports"][0]["port"] == 8003
+    assert services["delegate"]["spec"]["ports"][0]["targetPort"] == "http"
+    assert env_of(container)["TASKBOARD_DELEGATE_PORT" if False else "TASKBOARD_DELEGATE_TOKENS"]
+    cm = of_kind(docs, "ConfigMap")[0]["data"]
+    assert cm["TASKBOARD_DELEGATE_PORT"] == "8003"
+
+
+def test_delegate_absent_without_token():
+    docs = render()
+    assert "delegate" not in deployments(docs)
+    assert all(
+        s["metadata"]["labels"]["app.kubernetes.io/component"] != "delegate"
+        for s in of_kind(docs, "Service")
+    )
+    for dep in deployments(docs).values():
+        env = env_of(dep["spec"]["template"]["spec"]["containers"][0])
+        assert "TASKBOARD_DELEGATE_TOKENS" not in env
+
+
+def test_delegate_token_is_secretref_not_rendered():
+    docs = render(WITH_DELEGATE)
+    cm = of_kind(docs, "ConfigMap")[0]["data"]
+    assert "dlg-fixture" not in str(cm)
+    secrets = {s["metadata"]["name"]: s for s in of_kind(docs, "Secret")}
+    assert secrets["tb-agents-taskboard"]["stringData"]["delegate-tokens"] == DELEGATE_TOKENS
+    for dep in deployments(docs).values():
+        env = env_of(dep["spec"]["template"]["spec"]["containers"][0])
+        ref = env["TASKBOARD_DELEGATE_TOKENS"]["valueFrom"]["secretKeyRef"]
+        assert ref == {"name": "tb-agents-taskboard", "key": "delegate-tokens"}
+        assert "value" not in env["TASKBOARD_DELEGATE_TOKENS"]
+
+
+def test_delegate_existing_secret_referenced():
+    docs = render({"delegateExistingSecret": "dlg", "delegateExistingSecretKey": "t"})
+    assert "delegate" in deployments(docs)
+    assert all(
+        "delegate-tokens" not in (s.get("stringData") or {}) for s in of_kind(docs, "Secret")
+    )
+    env = env_of(deployments(docs)["delegate"]["spec"]["template"]["spec"]["containers"][0])
+    ref = env["TASKBOARD_DELEGATE_TOKENS"]["valueFrom"]["secretKeyRef"]
+    assert ref == {"name": "dlg", "key": "t"}
+
+
+def test_delegate_setting_both_or_neither_value_fails_render():
+    proc = _run(_merge(BASE, {**WITH_DELEGATE, "delegateExistingSecret": "dlg"}))
+    assert proc.returncode != 0
+    assert "set only one of the delegate tokens value" in proc.stderr
+    # neither value is the supported "no delegate" case and renders
+    assert _run(BASE).returncode == 0
 
 
 def test_settings_and_secrets_wiring():
@@ -158,6 +227,7 @@ def test_web_pod_annotations_and_allowed_cidrs():
     anno = {"oauth2-proxy/inject": "true"}
     docs = render(
         {
+            **WITH_DELEGATE,
             "components": {"web": {"podAnnotations": anno}},
             "allowedCidrs": ["10.0.0.0/8", "127.0.0.1/32"],
         }
@@ -165,7 +235,7 @@ def test_web_pod_annotations_and_allowed_cidrs():
     deps = deployments(docs)
     web = deps["web"]["spec"]["template"]["metadata"]["annotations"]
     assert web["oauth2-proxy/inject"] == "true"
-    for other in ("service", "notifier"):
+    for other in ("service", "notifier", "delegate"):
         assert (
             "oauth2-proxy/inject" not in deps[other]["spec"]["template"]["metadata"]["annotations"]
         )
@@ -173,19 +243,33 @@ def test_web_pod_annotations_and_allowed_cidrs():
     assert cm["TASKBOARD_ALLOWED_CIDRS"] == "10.0.0.0/8,127.0.0.1/32"
 
 
-def test_ingress_routes_web_only():
-    docs = render({"ingress": {"enabled": True}})
+def test_ingress_still_routes_web_only():
+    docs = render({**WITH_DELEGATE, "ingress": {"enabled": True}})
     ing = of_kind(docs, "Ingress")[0]
     rule = ing["spec"]["rules"][0]
     assert rule["host"] == "lab.szymonrichert.pl"
     path = rule["http"]["paths"][0]
     assert path["path"] == "/taskboard" and path["pathType"] == "Prefix"
     assert path["backend"]["service"]["name"].endswith("-web")
+    assert len(rule["http"]["paths"]) == 1
+    assert "delegate" not in str(of_kind(docs, "Ingress"))
     assert of_kind(render(), "Ingress") == []
 
 
 def test_pods_are_locked_down():
     for dep in deployments(render()).values():
+        _assert_locked_down(dep)
+
+
+def test_delegate_pod_locked_down():
+    deps = deployments(render(WITH_DELEGATE))
+    assert "delegate" in deps
+    for dep in deps.values():
+        _assert_locked_down(dep)
+
+
+def _assert_locked_down(dep: dict) -> None:
+    if True:
         spec = dep["spec"]["template"]["spec"]
         assert spec["securityContext"]["runAsNonRoot"] is True
         for c in [*spec["containers"], *spec["initContainers"]]:

@@ -33,6 +33,14 @@ relayToken: ""
 relayExistingSecret: ""
 relayExistingSecretKey: token
 
+# Optional bearer token list of the delegate listener (cluster-only, acts as a user; the
+# agents-app-connector relays to it). Comma separated, each token different from the relay token.
+# Set exactly one of delegateTokens and delegateExistingSecret to render the delegate component;
+# set neither and it is absent.
+delegateTokens: ""
+delegateExistingSecret: ""
+delegateExistingSecretKey: tokens
+
 # Source CIDRs allowed on the web listener. The oauth2-proxy sidecar (see components.web
 # podAnnotations) reaches it from the pod loopback.
 allowedCidrs:
@@ -42,7 +50,8 @@ allowedCidrs:
 env: {}
 
 # web: user-facing api (admission by the oauth2-proxy pod annotations set here). service: the
-# orchestrator relay api (bearer token). notifier: singleton (one replica, Recreate).
+# orchestrator relay api (bearer token). delegate: optional cluster-only user api (bearer token
+# list, no ingress, no oauth2). notifier: singleton (one replica, Recreate).
 components:
   web:
     replicas: 1
@@ -54,6 +63,13 @@ components:
   service:
     replicas: 1
     port: 8002
+    podAnnotations: {}
+    resources:
+      requests: {cpu: 25m, memory: 128Mi}
+      limits: {memory: 256Mi}
+  delegate:
+    replicas: 1
+    port: 8003
     podAnnotations: {}
     resources:
       requests: {cpu: 25m, memory: 128Mi}

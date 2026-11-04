@@ -1,4 +1,6 @@
-{{- range $component := list "web" "service" }}
+{{- $components := list "web" "service" }}
+{{- if include "agents-taskboard.delegateEnabled" . }}{{ $components = append $components "delegate" }}{{ end }}
+{{- range $component := $components }}
 {{- $cfg := index $.Values.components $component }}
 ---
 apiVersion: v1

@@ -100,6 +100,15 @@ key: {{ .own | quote }}
 {{- include "agents-taskboard.secretKeyRef" (dict "ctx" . "existing" .Values.relayExistingSecret "key" .Values.relayExistingSecretKey "own" "relay-token" "set" (ne (.Values.relayToken | default "") "") "what" "relay token") -}}
 {{- end }}
 
+{{/* "true" when the optional delegate component is wanted (a token value or an existing Secret). */}}
+{{- define "agents-taskboard.delegateEnabled" -}}
+{{- if or (ne (.Values.delegateTokens | default "") "") .Values.delegateExistingSecret -}}true{{- end -}}
+{{- end }}
+
+{{- define "agents-taskboard.delegateRef" -}}
+{{- include "agents-taskboard.secretKeyRef" (dict "ctx" . "existing" .Values.delegateExistingSecret "key" .Values.delegateExistingSecretKey "own" "delegate-tokens" "set" (ne (.Values.delegateTokens | default "") "") "what" "delegate tokens") -}}
+{{- end }}
+
 {{/* Settings ConfigMap data shared by every component; no secret values. Fails on a bad env key. */}}
 {{- define "agents-taskboard.config" -}}
 TASKBOARD_PUBLIC_BASE_URL: {{ required "agents-taskboard: publicUrl is required (the link base the notices carry)" .Values.publicUrl | quote }}
@@ -107,6 +116,9 @@ TASKBOARD_ORCHESTRATOR_URL: {{ required "agents-taskboard: orchestrator.url is r
 TASKBOARD_HTTP_PORT: {{ .Values.components.web.port | int | toString | quote }}
 TASKBOARD_SERVICE_PORT: {{ .Values.components.service.port | int | toString | quote }}
 TASKBOARD_ALLOWED_CIDRS: {{ join "," .Values.allowedCidrs | quote }}
+{{- if include "agents-taskboard.delegateEnabled" . }}
+TASKBOARD_DELEGATE_PORT: {{ .Values.components.delegate.port | int | toString | quote }}
+{{- end }}
 {{- range $k, $v := .Values.env }}
 {{- if not (hasPrefix "TASKBOARD_" $k) }}
 {{- fail (printf "agents-taskboard: env key %q must start with TASKBOARD_" $k) }}
@@ -133,4 +145,10 @@ env:
     valueFrom:
       secretKeyRef:
         {{- include "agents-taskboard.relayRef" . | nindent 8 }}
+  {{- if include "agents-taskboard.delegateEnabled" . }}
+  - name: TASKBOARD_DELEGATE_TOKENS
+    valueFrom:
+      secretKeyRef:
+        {{- include "agents-taskboard.delegateRef" . | nindent 8 }}
+  {{- end }}
 {{- end }}
