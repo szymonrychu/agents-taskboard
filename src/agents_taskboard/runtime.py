@@ -1,4 +1,5 @@
-"""Process entry points of the two http listeners: web (users) and service (orchestrator relay)."""
+"""Process entry points of the three http listeners: web (users), service (orchestrator relay)
+and delegate (cluster-only user actor)."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from agents_common.runtime import run_service
 from fastapi import FastAPI
 from psycopg_pool import AsyncConnectionPool
 
-from agents_taskboard.api.app import create_service_app, create_web_app
+from agents_taskboard.api.app import create_delegate_app, create_service_app, create_web_app
 from agents_taskboard.settings import Settings
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -72,3 +73,8 @@ def web_main(settings: Settings) -> int:
 def service_main(settings: Settings) -> int:
     """Serve the relay-facing app on TASKBOARD_SERVICE_PORT until SIGTERM or SIGINT."""
     return _main(settings, create_service_app, settings.service_port)
+
+
+def delegate_main(settings: Settings) -> int:
+    """Serve the delegate app on TASKBOARD_DELEGATE_PORT until SIGTERM or SIGINT."""
+    return _main(settings, create_delegate_app, settings.delegate_port)
