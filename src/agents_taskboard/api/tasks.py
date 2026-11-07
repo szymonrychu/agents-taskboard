@@ -33,10 +33,12 @@ def public_url(request: Request) -> str:
     return settings.public_base_url
 
 
-async def load_one(request: Request, task_id: int) -> dict[str, Any]:
+async def load_one(
+    request: Request, task_id: int, window: repo.Window = repo.NO_WINDOW
+) -> dict[str, Any]:
     """The full task JSON, or 404."""
     async with pool_of(request).connection() as conn:
-        found = await repo.load_tasks(conn, [task_id], public_url(request))
+        found = await repo.load_tasks(conn, [task_id], public_url(request), window)
     if not found:
         raise ApiError(404, "not_found", f"no task T-{task_id}")
     return found[0]
@@ -114,8 +116,17 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
         return {"items": items, "next_cursor": next_cursor}
 
     @router.get("/tasks/{key}")
-    async def get_task(key: str, request: Request, actor: ActorDep) -> dict[str, Any]:
-        return await load_one(request, task_id_of(key))
+    async def get_task(
+        key: str,
+        request: Request,
+        actor: ActorDep,
+        events_limit: Annotated[int | None, Query(ge=0, le=MAX_LIMIT)] = None,
+        events_before: Annotated[int | None, Query(ge=1)] = None,
+        comments_limit: Annotated[int | None, Query(ge=0, le=MAX_LIMIT)] = None,
+        comments_before: Annotated[int | None, Query(ge=1)] = None,
+    ) -> dict[str, Any]:
+        window = repo.Window(events_limit, events_before, comments_limit, comments_before)
+        return await load_one(request, task_id_of(key), window)
 
     @router.patch("/tasks/{key}")
     async def patch_task(

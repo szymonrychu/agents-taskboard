@@ -76,3 +76,8 @@ Created as a separate Python microservice (not a part of the orchestrator) becau
 
 ## 2026-11-02 stream listener restarts on any error
 agents-common `listen` reconnects only on OperationalError/OSError; any other exception would end the hub's listen task silently while `running` stayed true. `_listen_loop` now logs and restarts after a capped exponential backoff (0.5 s to 30 s, reset on a delivered notification); CancelledError still propagates. The poll fallback covers the gap.
+
+## 2026-11-07 - task read windows (T-61)
+
+- Why: the MCP output budget; a task with a long history does not fit one tool answer. `GET /tasks/{key}` takes `events_limit`/`comments_limit` (0..200, newest N, oldest first) and `events_before`/`comments_before` (id cursors for paging back). Absent params return everything, so agents-web is unchanged.
+- The limit is a `row_number() OVER (PARTITION BY task_id ...)` window, so `load_tasks` stays correct for any id list (list answers, write answers), not just one task. `events_total` and `comments_total` are on every task answer and ignore windows and cursors.

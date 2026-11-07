@@ -65,7 +65,7 @@ Create an idea or task: `title`, `body`, `kind`, `status`, `labels`, `assignee_s
 
 ### `GET /taskboard/api/v1/tasks/{key}`
 
-One task with its labels, comments, todo, decisions and history. `404 not_found` for an unknown or malformed key.
+One task with its labels, comments, todo, decisions and history. `404 not_found` for an unknown or malformed key. Optional `events_limit` and `comments_limit` (0..200) return only the newest N events or comments (oldest first); `events_before` and `comments_before` (ids) page back to items with a smaller id. Every task carries `events_total` and `comments_total`. `422 invalid_request` for out-of-range values.
 
 ### `PATCH /taskboard/api/v1/tasks/{key}`
 

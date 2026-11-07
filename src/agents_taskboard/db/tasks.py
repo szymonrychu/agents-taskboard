@@ -264,15 +264,52 @@ async def list_task_ids(
     return [r[0] for r in rows], next_cursor
 
 
-async def _rows(conn: psycopg.AsyncConnection, query: str, ids: list[int]) -> list[dict]:
-    cur = await conn.cursor(row_factory=dict_row).execute(query, (ids,))
+@dataclass(frozen=True)
+class Window:
+    """Newest-N window of a task's events and comments; None means no limit or no cursor.
+    ``*_before`` keeps only items with a smaller id (paging back)."""
+
+    events_limit: int | None = None
+    events_before: int | None = None
+    comments_limit: int | None = None
+    comments_before: int | None = None
+
+
+NO_WINDOW = Window()
+
+
+def _child_query(
+    table: str, columns: str, limit: int | None, before: int | None
+) -> tuple[str, tuple]:
+    """Rows of one child table for the task ids (first parameter), oldest first; with a limit
+    only the newest ``limit`` per task."""
+    where = "task_id = ANY(%s)" + (" AND id < %s" if before is not None else "")
+    extra: tuple = (before,) if before is not None else ()
+    if limit is None:
+        return f"SELECT {columns} FROM {table} WHERE {where} ORDER BY id", extra
+    return (
+        f"SELECT {columns} FROM (SELECT {columns}, row_number() OVER"
+        f" (PARTITION BY task_id ORDER BY id DESC) AS rn FROM {table} WHERE {where}) w"
+        " WHERE rn <= %s ORDER BY id",
+        (*extra, limit),
+    )
+
+
+async def _rows(
+    conn: psycopg.AsyncConnection, query: str, ids: list[int], extra: tuple = ()
+) -> list[dict]:
+    cur = await conn.cursor(row_factory=dict_row).execute(query, (ids, *extra))
     return await cur.fetchall()
 
 
 async def load_tasks(
-    conn: psycopg.AsyncConnection, ids: list[int], public_url: str
+    conn: psycopg.AsyncConnection,
+    ids: list[int],
+    public_url: str,
+    window: Window = NO_WINDOW,
 ) -> list[dict[str, Any]]:
-    """The task JSON for `ids`, in that order (missing ids are skipped)."""
+    """The task JSON for `ids`, in that order (missing ids are skipped). `window` shapes the
+    comments and events lists only; `comments_total` and `events_total` count every item."""
     if not ids:
         return []
     tasks = {
@@ -285,7 +322,7 @@ async def load_tasks(
         )
     }
     children: dict[str, dict[int, list[dict]]] = {}
-    for name, query in (
+    for name, query, *rest in (
         (
             "todo",
             "SELECT id, task_id, text, status, position FROM todo_items"
@@ -299,19 +336,34 @@ async def load_tasks(
         ),
         (
             "comments",
-            "SELECT id, task_id, author_kind, author_session, author_slug, body, created_at"
-            " FROM comments WHERE task_id = ANY(%s) ORDER BY id",
+            *_child_query(
+                "comments",
+                "id, task_id, author_kind, author_session, author_slug, body, created_at",
+                window.comments_limit,
+                window.comments_before,
+            ),
         ),
         (
             "events",
-            "SELECT id, task_id, actor_kind, actor_session, actor_slug, kind, detail, at"
-            " FROM events WHERE task_id = ANY(%s) ORDER BY id",
+            *_child_query(
+                "events",
+                "id, task_id, actor_kind, actor_session, actor_slug, kind, detail, at",
+                window.events_limit,
+                window.events_before,
+            ),
         ),
     ):
         grouped: dict[int, list[dict]] = {}
-        for row in await _rows(conn, query, ids):
+        for row in await _rows(conn, query, ids, *rest):
             grouped.setdefault(row.pop("task_id"), []).append(row)
         children[name] = grouped
+    totals: dict[str, dict[int, int]] = {}
+    for table in ("comments", "events"):
+        cur = await conn.execute(
+            f"SELECT task_id, count(*) FROM {table} WHERE task_id = ANY(%s) GROUP BY task_id",
+            (ids,),
+        )
+        totals[table] = {task_id: n for task_id, n in await cur.fetchall()}
     out = []
     for task_id in ids:
         task = tasks.get(task_id)
@@ -338,7 +390,9 @@ async def load_tasks(
                 "todo": children["todo"].get(task_id, []),
                 "decisions": decisions,
                 "comments": children["comments"].get(task_id, []),
+                "comments_total": totals["comments"].get(task_id, 0),
                 "events": children["events"].get(task_id, []),
+                "events_total": totals["events"].get(task_id, 0),
                 "url": task_url(public_url, key),
             }
         )
