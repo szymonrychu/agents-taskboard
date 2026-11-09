@@ -10,6 +10,9 @@ OPTS = [
 ]
 
 
+WITHDRAW = {"reason": "asked twice", "answered_elsewhere": "user said so in chat"}
+
+
 def dec_url(key: str, decision_id: int | None = None, action: str | None = None) -> str:
     url = f"{TASKS}/{key}/decisions"
     if decision_id is not None:
@@ -187,7 +190,7 @@ async def test_second_answer_same_asker_pending_notice_one_row(service_client, w
 
 async def test_answer_withdrawn_is_409_no_notice(service_client, web_client, conn):
     key, did = await make(service_client)
-    r = await service_client.post(dec_url(key, did, "withdraw"), headers=agent())
+    r = await service_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW, headers=agent())
     assert r.status_code == 200 and r.json()["status"] == "withdrawn"
     r = await web_client.post(dec_url(key, did, "answer"), json={"choice": 0})
     assert r.status_code == 409
@@ -206,9 +209,11 @@ async def test_answer_twice_is_409(service_client, web_client):
 
 async def test_withdraw_by_other_session_403(service_client, web_client):
     key, did = await make(service_client)
-    r = await service_client.post(dec_url(key, did, "withdraw"), headers=agent(S2, "mx-2"))
+    r = await service_client.post(
+        dec_url(key, did, "withdraw"), json=WITHDRAW, headers=agent(S2, "mx-2")
+    )
     assert r.status_code == 403
-    r = await web_client.post(dec_url(key, did, "withdraw"))
+    r = await web_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW)
     assert r.status_code == 403
     task = (await web_client.get(f"{TASKS}/{key}")).json()
     assert task["decisions"][0]["status"] == "open"
@@ -217,23 +222,23 @@ async def test_withdraw_by_other_session_403(service_client, web_client):
 async def test_withdraw_only_while_open(service_client, web_client):
     key, did = await make(service_client)
     await web_client.post(dec_url(key, did, "answer"), json={"choice": 0})
-    r = await service_client.post(dec_url(key, did, "withdraw"), headers=agent())
+    r = await service_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW, headers=agent())
     assert r.status_code == 409
     key2, did2 = await make(service_client)
     assert (
-        await service_client.post(dec_url(key2, did2, "withdraw"), headers=agent())
+        await service_client.post(dec_url(key2, did2, "withdraw"), json=WITHDRAW, headers=agent())
     ).status_code == 200
     assert (
-        await service_client.post(dec_url(key2, did2, "withdraw"), headers=agent())
+        await service_client.post(dec_url(key2, did2, "withdraw"), json=WITHDRAW, headers=agent())
     ).status_code == 409
     assert (
-        await service_client.post(dec_url(key, 99999, "withdraw"), headers=agent())
+        await service_client.post(dec_url(key, 99999, "withdraw"), json=WITHDRAW, headers=agent())
     ).status_code == 404
 
 
 async def test_withdraw_clears_blocked_and_logs(service_client, web_client, conn):
     key, did = await make(service_client)
-    await service_client.post(dec_url(key, did, "withdraw"), headers=agent())
+    await service_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW, headers=agent())
     task = (await web_client.get(f"{TASKS}/{key}")).json()
     assert task["blocked"] is False
     assert "decision_withdrawn" in [e["kind"] for e in task["events"]]
@@ -242,7 +247,7 @@ async def test_withdraw_clears_blocked_and_logs(service_client, web_client, conn
 
 async def test_withdraw_then_ask_again_creates_new_decision(service_client):
     key, did = await make(service_client, client_key="k")
-    await service_client.post(dec_url(key, did, "withdraw"), headers=agent())
+    await service_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW, headers=agent())
     r = await ask(service_client, key)
     assert r.status_code == 201 and r.json()["id"] != did
 
@@ -258,7 +263,9 @@ async def test_task_blocked_flag_follows_open_decisions(service_client, web_clie
     await web_client.post(dec_url(key, d1, "answer"), json={"choice": 0})
     t = (await web_client.get(f"{TASKS}/{key}")).json()
     assert t["blocked"] and t["open_decisions"] == 1
-    await service_client.post(dec_url(key, d2, "withdraw"), headers=agent(S2, "mx-2"))
+    await service_client.post(
+        dec_url(key, d2, "withdraw"), json=WITHDRAW, headers=agent(S2, "mx-2")
+    )
     t = (await web_client.get(f"{TASKS}/{key}")).json()
     assert not t["blocked"] and t["open_decisions"] == 0
 
@@ -320,7 +327,97 @@ async def test_decision_responses_carry_task_url(service_client, web_client):
     assert answered.json()["url"] == expected
     other = await ask(service_client, key, question="again?")
     withdrawn = await service_client.post(
-        dec_url(key, other.json()["id"], "withdraw"), headers=agent()
+        dec_url(key, other.json()["id"], "withdraw"), json=WITHDRAW, headers=agent()
     )
     assert withdrawn.status_code == 200
     assert withdrawn.json()["url"] == expected
+
+
+async def withdraw(client, key, did, headers=None, **body):
+    return await client.post(
+        dec_url(key, did, "withdraw"),
+        json=body,
+        headers=headers if headers is not None else agent(),
+    )
+
+
+async def test_withdraw_without_body_or_reason_422(service_client):
+    key, did = await make(service_client)
+    r = await service_client.post(dec_url(key, did, "withdraw"), headers=agent())
+    assert r.status_code == 422
+    for body in (
+        {},
+        {"answered_elsewhere": "x"},
+        {"reason": "r"},
+        {"reason": "  ", "answered_elsewhere": "x"},
+        {"reason": "r", "answered_elsewhere": " "},
+        {"reason": "r", "answered_elsewhere": "x", "superseded_by": did + 1},
+        {"reason": "r", "answered_elsewhere": "x", "extra": 1},
+        {"reason": "r" * 2001, "answered_elsewhere": "x"},
+    ):
+        assert (await withdraw(service_client, key, did, **body)).status_code == 422, body
+    r = await service_client.get(f"{TASKS}/{key}", headers=agent())
+    assert r.json()["decisions"][0]["status"] == "open"
+
+
+async def test_withdraw_superseded_by_stores_outcome_and_event(service_client, web_client):
+    key, did = await make(service_client)
+    r = await ask(service_client, key, question="better?")
+    new = r.json()["id"]
+    r = await withdraw(service_client, key, did, reason="reworded", superseded_by=new)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["status"] == "withdrawn"
+    assert (d["withdraw_reason"], d["superseded_by"], d["answered_elsewhere"]) == (
+        "reworded",
+        new,
+        None,
+    )
+    assert d["superseded_by_task_key"] == key
+    task = (await web_client.get(f"{TASKS}/{key}")).json()
+    stored = next(x for x in task["decisions"] if x["id"] == did)
+    assert stored["superseded_by"] == new and stored["superseded_by_task_key"] == key
+    event = next(e for e in task["events"] if e["kind"] == "decision_withdrawn")
+    assert event["detail"] == {"decision_id": did, "superseded_by": new}
+
+
+async def test_withdraw_answered_elsewhere_stores_text(service_client, web_client):
+    key, did = await make(service_client)
+    r = await withdraw(service_client, key, did, reason="r", answered_elsewhere="see T-5")
+    d = r.json()
+    assert (d["withdraw_reason"], d["superseded_by"], d["answered_elsewhere"]) == (
+        "r",
+        None,
+        "see T-5",
+    )
+    assert d["superseded_by_task_key"] is None
+    task = (await web_client.get(f"{TASKS}/{key}")).json()
+    event = next(e for e in task["events"] if e["kind"] == "decision_withdrawn")
+    assert event["detail"] == {"decision_id": did}
+
+
+async def test_open_decision_has_null_withdrawal_fields(service_client):
+    key, did = await make(service_client)
+    r = await service_client.get(f"{TASKS}/{key}", headers=agent())
+    d = r.json()["decisions"][0]
+    assert d["withdraw_reason"] is None and d["superseded_by"] is None
+    assert d["answered_elsewhere"] is None and d["superseded_by_task_key"] is None
+
+
+async def test_withdraw_superseded_by_self_or_unknown_422(service_client):
+    key, did = await make(service_client)
+    for target in (did, 99999):
+        r = await withdraw(service_client, key, did, reason="r", superseded_by=target)
+        assert r.status_code == 422, target
+        assert r.json()["error"]["code"] == "invalid_request"
+    assert (
+        await withdraw(service_client, key, did, reason="r", superseded_by=0)
+    ).status_code == 422
+
+
+async def test_withdraw_superseded_by_other_task_in_scope_ok(service_client):
+    key, did = await make(service_client)
+    _, other = await make(service_client)
+    r = await withdraw(service_client, key, did, reason="r", superseded_by=other)
+    assert r.status_code == 200
+    assert r.json()["superseded_by_task_key"] != key

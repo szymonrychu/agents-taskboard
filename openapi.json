@@ -134,6 +134,47 @@
         "title": "DecisionOption",
         "type": "object"
       },
+      "DecisionWithdraw": {
+        "additionalProperties": false,
+        "properties": {
+          "answered_elsewhere": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answered Elsewhere"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "superseded_by": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded By"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "DecisionWithdraw",
+        "type": "object"
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -1289,6 +1330,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionWithdraw"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {

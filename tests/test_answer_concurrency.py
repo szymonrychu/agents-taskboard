@@ -3,7 +3,7 @@ import asyncio
 import psycopg
 from psycopg_pool import AsyncConnectionPool
 from test_api_tasks import TASKS
-from test_decisions import dec_url, make
+from test_decisions import WITHDRAW, dec_url, make
 
 from agents_taskboard.db import decisions as repo
 
@@ -56,7 +56,7 @@ async def test_answer_races_withdraw(service_client, web_client, pool: AsyncConn
     key, did = await make(service_client)
     results = await asyncio.gather(
         web_client.post(dec_url(key, did, "answer"), json={"choice": 0}),
-        service_client.post(dec_url(key, did, "withdraw"), headers=agent()),
+        service_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW, headers=agent()),
     )
     codes = sorted(r.status_code for r in results)
     assert codes == [200, 409]

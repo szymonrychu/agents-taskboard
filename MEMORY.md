@@ -2,6 +2,10 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-09 - withdraw needs a reason and an outcome (T-102)
+
+`POST .../withdraw` now requires a body: `reason` plus exactly one of `superseded_by` (decision id, any task in the caller's project scope, checked with `get_decision`, not itself) or `answered_elsewhere` (text). Why required: an agent that withdraws a question must say where the answer went, so the user sees no silent disappearance. Bodyless calls get 422 on purpose; no compatibility layer, so the orchestrator plugin must be deployed before this version. Migration 0003 adds the columns and the CHECK `decisions_withdrawn_has_outcome` as NOT VALID: withdrawn rows from before it have no outcome and are never rewritten (writes are guarded on status = 'open'), so validating would force a fake backfill; new rows are still checked. `[IF T-102 Q1=A]` restrict superseded_by to the same task and drop `superseded_by_task_key`; `[IF Q2=B]` backfill a reason and VALIDATE.
+
 ## 2026-11-09 - label notices scoped by project (projects P10)
 
 - Label notices go only to sessions of the task's project plus superleaders. `SessionLookup.live_session_ids(labels, project)` sends `label=..&project=<task project>&superleaders=include`; the orchestrator combines the filters (label AND (project OR superleader)), and the client-side label check stays because `FakeOrchestrator` ignores query params. The project is read from the task at scan time (`claim_label_event` joins tasks), so a task moved before the scan notifies its new project. An archived project still lists in the orchestrator; an unknown one answers 422, which marks the event scanned with no notices (1fc6c49).

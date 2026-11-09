@@ -96,7 +96,7 @@ ROUTES = {
     "decision_withdraw": lambda key, item, dec: (
         "POST",
         f"{TASKS}/{key}/decisions/{dec}/withdraw",
-        None,
+        {"reason": "r", "answered_elsewhere": "x"},
     ),
 }
 
@@ -135,13 +135,39 @@ async def test_relay_route_scope_matrix(service_client, conn, route, caller):
         assert r.json().get("task_key", r.json().get("key")) == key
 
 
+BODY = {"reason": "r", "answered_elsewhere": "x"}
+
+
+async def test_withdraw_superseded_by_other_projects_decision_422(service_client):
+    key_a, _, dec_a = await seed(service_client)
+    task_b = await make_task(service_client, "b")
+    dec_b = (
+        await service_client.post(
+            f"{TASKS}/{task_b['key']}/decisions",
+            json={
+                "question": "q?",
+                "options": [{"label": "y", "recommended": True}, {"label": "n"}],
+            },
+            headers=scope("b"),
+        )
+    ).json()["id"]
+    url = f"{TASKS}/{key_a}/decisions/{dec_a}/withdraw"
+    body = {"reason": "r", "superseded_by": dec_b}
+    r = await service_client.post(url, json=body, headers=scope("a"))
+    assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_request"
+    r = await service_client.post(url, json=body, headers=scope("*"))
+    assert r.status_code == 200 and r.json()["superseded_by_task_key"] == task_b["key"]
+
+
 async def test_decision_of_another_projects_task_is_404_like_unknown(service_client):
     _, _, dec_a = await seed(service_client)
     task_b = await make_task(service_client, "b")
     key_b = task_b["key"]
-    r = await service_client.post(f"{TASKS}/{key_b}/decisions/{dec_a}/withdraw", headers=scope("b"))
+    r = await service_client.post(
+        f"{TASKS}/{key_b}/decisions/{dec_a}/withdraw", json=BODY, headers=scope("b")
+    )
     unknown = await service_client.post(
-        f"{TASKS}/{key_b}/decisions/999999/withdraw", headers=scope("b")
+        f"{TASKS}/{key_b}/decisions/999999/withdraw", json=BODY, headers=scope("b")
     )
     assert (r.status_code, unknown.status_code) == (404, 404)
     assert r.json() == json.loads(json.dumps(unknown.json()).replace("999999", str(dec_a)))

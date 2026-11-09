@@ -5,7 +5,7 @@ import json
 import httpx
 from conftest import BASE_URL, DELEGATE_TOKEN
 from test_api_tasks import S1, TASKS, agent
-from test_decisions import OPTS, ask, dec_url
+from test_decisions import OPTS, WITHDRAW, ask, dec_url
 from test_stream import open_stream, serve
 
 from agents_taskboard.api.app import PREFIX, create_delegate_app
@@ -103,10 +103,10 @@ async def test_ask_and_withdraw_refuse_user_actor(delegate_client, web_client, s
     for client in (delegate_client, web_client):
         r = await ask(client, key, headers={})
         assert (r.status_code, r.json()["error"]["code"]) == (403, "agent_required")
-        r = await client.post(dec_url(key, did, "withdraw"))
+        r = await client.post(dec_url(key, did, "withdraw"), json=WITHDRAW)
         assert r.status_code == 403
-    web = await web_client.post(dec_url(key, did, "withdraw"))
-    delegate = await delegate_client.post(dec_url(key, did, "withdraw"))
+    web = await web_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW)
+    delegate = await delegate_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW)
     assert web.json() == delegate.json()
 
 

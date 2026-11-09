@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.api.errors import ApiError
-from agents_taskboard.api.schemas import DecisionAnswer, DecisionCreate
+from agents_taskboard.api.schemas import DecisionAnswer, DecisionCreate, DecisionWithdraw
 from agents_taskboard.api.tasks import pool_of, public_url, task_id_of
 from agents_taskboard.db import decisions as repo
 from agents_taskboard.db import tasks as tasks_repo
@@ -39,11 +39,24 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
 
     @router.post("/tasks/{key}/decisions/{decision_id}/withdraw")
     async def withdraw(
-        key: str, decision_id: int, request: Request, actor: ActorDep
+        key: str, decision_id: int, body: DecisionWithdraw, request: Request, actor: ActorDep
     ) -> dict[str, Any]:
         task_id = task_id_of(key)
         async with pool_of(request).connection() as conn:
-            decision = await repo.withdraw_decision(conn, actor, decision_id, task_id)
+            if body.superseded_by is not None and (
+                body.superseded_by == decision_id
+                or await repo.get_decision(conn, actor, body.superseded_by) is None
+            ):
+                raise ApiError(422, "invalid_request", "superseded_by: no such decision")
+            decision = await repo.withdraw_decision(
+                conn,
+                actor,
+                decision_id,
+                task_id,
+                body.reason,
+                body.superseded_by,
+                body.answered_elsewhere,
+            )
             if decision is not None:
                 return decision.as_json(public_url(request))
             current = await repo.get_decision(conn, actor, decision_id)

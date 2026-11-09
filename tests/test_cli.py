@@ -29,7 +29,11 @@ def test_migrate_applies_and_prints_names(monkeypatch, empty_db_url, capsys):
     }.items():
         monkeypatch.setenv(f"TASKBOARD_{key}", value)
     assert main(["migrate"]) == 0
-    assert capsys.readouterr().out.split() == ["0001_taskboard.sql", "0002_projects.sql"]
+    assert capsys.readouterr().out.split() == [
+        "0001_taskboard.sql",
+        "0002_projects.sql",
+        "0003_decision_withdrawal.sql",
+    ]
     assert main(["migrate"]) == 0
     assert capsys.readouterr().out == ""
 

@@ -51,7 +51,11 @@ def add_notice(conn, task_id, session="s1", reason="decision", status="pending")
 
 
 def test_applies_twice_idempotent(empty_db_url):
-    assert run_migrations(empty_db_url, PACKAGE) == ["0001_taskboard.sql", "0002_projects.sql"]
+    assert run_migrations(empty_db_url, PACKAGE) == [
+        "0001_taskboard.sql",
+        "0002_projects.sql",
+        "0003_decision_withdrawal.sql",
+    ]
     assert run_migrations(empty_db_url, PACKAGE) == []
     with psycopg.connect(empty_db_url) as conn:
         tables = {
@@ -224,7 +228,10 @@ def test_migration_backfills_default(empty_db_url):
             "INSERT INTO events (task_id, actor_kind, kind) VALUES (%s, 'user', 'created')",
             (task,),
         )
-    assert run_migrations(empty_db_url, PACKAGE) == ["0002_projects.sql"]
+    assert run_migrations(empty_db_url, PACKAGE) == [
+        "0002_projects.sql",
+        "0003_decision_withdrawal.sql",
+    ]
     with psycopg.connect(empty_db_url) as conn:
         assert conn.execute("SELECT project FROM tasks").fetchall() == [("default",)]
         assert conn.execute("SELECT project FROM events").fetchall() == [("default",)]
@@ -238,3 +245,58 @@ def test_migration_backfills_default(empty_db_url):
 def test_tasks_project_status_index_exists(conn):
     defs = [r[0] for r in conn.execute("SELECT indexdef FROM pg_indexes WHERE tablename = 'tasks'")]
     assert any("(project, status)" in d for d in defs)
+
+
+def test_withdrawal_columns_exist(conn):
+    cols = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'decisions'"
+        )
+    }
+    assert {"withdraw_reason", "superseded_by", "answered_elsewhere"} <= cols
+
+
+def test_withdrawn_row_needs_reason_and_exactly_one_outcome(conn):
+    task = add_task(conn)
+    other = add_decision(conn, task)
+    for cols in (
+        {},
+        {"withdraw_reason": "r"},
+        {"answered_elsewhere": "x"},
+        {"withdraw_reason": "r", "superseded_by": other, "answered_elsewhere": "x"},
+    ):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            add_decision(conn, task, status="withdrawn", **cols)
+    add_decision(conn, task, status="withdrawn", withdraw_reason="r", superseded_by=other)
+    add_decision(conn, task, status="withdrawn", withdraw_reason="r", answered_elsewhere="x")
+    add_decision(conn, task, status="open")
+
+
+def test_legacy_withdrawn_row_survives_check(empty_db_url):
+    """A withdrawn row written before 0003 stays; the CHECK is NOT VALID."""
+    for name in ("0001_taskboard.sql", "0002_projects.sql"):
+        sql = (resources.files(PACKAGE) / "migrations" / name).read_text()
+        with psycopg.connect(empty_db_url, autocommit=True) as conn:
+            conn.execute(sql)
+            if name.startswith("0001"):
+                conn.execute(
+                    "CREATE TABLE schema_migrations (package text NOT NULL, name text NOT NULL,"
+                    " checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now(),"
+                    " PRIMARY KEY (package, name))"
+                )
+            conn.execute(
+                "INSERT INTO schema_migrations (package, name, checksum) VALUES (%s, %s, %s)",
+                (PACKAGE, name, hashlib.sha256(sql.encode()).hexdigest()),
+            )
+        if name.startswith("0001"):
+            with psycopg.connect(empty_db_url, autocommit=True) as conn:
+                legacy = add_decision(conn, add_task(conn), status="withdrawn")
+    assert run_migrations(empty_db_url, PACKAGE) == ["0003_decision_withdrawal.sql"]
+    with psycopg.connect(empty_db_url) as conn:
+        row = conn.execute(
+            "SELECT status, withdraw_reason, superseded_by, answered_elsewhere FROM decisions"
+            " WHERE id = %s",
+            (legacy,),
+        ).fetchone()
+        assert row == ("withdrawn", None, None, None)
