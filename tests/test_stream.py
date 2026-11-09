@@ -8,9 +8,11 @@ import pytest
 import uvicorn
 from agents_common.db import listen
 from test_api_tasks import PREFIX, TASKS, agent, create
+from test_scope import ORCH, orchestrator
 
 from agents_taskboard.api import stream
 from agents_taskboard.api.app import create_service_app, create_web_app
+from agents_taskboard.projects import ProjectLookup
 
 STREAM = f"{PREFIX}/stream"
 
@@ -89,13 +91,48 @@ async def test_stream_emits_task_changed_after_comment(web_app, service_client):
         assert r.status_code == 201
         frame = await sse.next()
         assert frame["event"] == "task_changed"
-        assert json.loads(frame["data"]) == {"key": key}
+        assert json.loads(frame["data"]) == {"key": key, "project": "default"}
         # the shared listener reported it once; the poll must not repeat it
         with pytest.raises(TimeoutError):
             await sse.next(timeout=0.8)
 
 
-async def test_stream_payload_is_key_only(web_app, service_client):
+async def test_task_changed_carries_project(web_app, service_client):
+    service_client.app.state.projects = ProjectLookup(ORCH, "t", transport=orchestrator())
+    key = (await create(service_client, agent(projects="a"), project="a"))["key"]
+    async with serve(web_app) as base, open_stream(web_app, base) as sse:
+        await service_client.post(
+            f"{TASKS}/{key}/comments", json={"body": "hi"}, headers=agent(projects="a")
+        )
+        frame = await sse.next()
+        assert json.loads(frame["data"]) == {"key": key, "project": "a"}
+
+
+async def test_stream_project_filter(web_app, service_client):
+    service_client.app.state.projects = ProjectLookup(ORCH, "t", transport=orchestrator())
+    a = (await create(service_client, agent(projects="a"), project="a"))["key"]
+    b = (await create(service_client, agent(projects="b"), project="b"))["key"]
+    async with (
+        serve(web_app) as base,
+        httpx.AsyncClient(base_url=base, timeout=15) as c,
+        c.stream("GET", STREAM, params={"project": "b"}) as resp,
+    ):
+        for _ in range(200):
+            if web_app.state.hub.subscriber_count() == 1:
+                break
+            await asyncio.sleep(0.02)
+        sse = SSE(resp)
+        for key, proj in ((a, "a"), (b, "b")):
+            await service_client.post(
+                f"{TASKS}/{key}/comments", json={"body": "x"}, headers=agent(projects=proj)
+            )
+        frame = await sse.next()
+        assert json.loads(frame["data"]) == {"key": b, "project": "b"}
+        with pytest.raises(TimeoutError):
+            await sse.next(timeout=0.8)
+
+
+async def test_stream_payload_is_key_and_project_only(web_app, service_client):
     key = (await create(service_client, title="secret title", body="secret body"))["key"]
     async with serve(web_app) as base, open_stream(web_app, base) as sse:
         await service_client.post(
@@ -103,7 +140,7 @@ async def test_stream_payload_is_key_only(web_app, service_client):
         )
         frame = await sse.next()
         assert set(frame) == {"event", "data"}
-        assert json.loads(frame["data"]) == {"key": key}
+        assert json.loads(frame["data"]) == {"key": key, "project": "default"}
         assert "secret" not in frame["data"]
 
 
@@ -116,7 +153,7 @@ async def test_polling_fallback_when_listener_down(settings, pool, service_clien
         )
         frame = await sse.next()
         assert frame["event"] == "task_changed"
-        assert json.loads(frame["data"]) == {"key": key}
+        assert json.loads(frame["data"]) == {"key": key, "project": "default"}
 
 
 async def test_hub_stops_with_last_subscriber_and_on_shutdown(web_app, service_client):
@@ -169,4 +206,4 @@ async def test_listener_restarts_after_unexpected_error(
             f"{TASKS}/{key}/comments", json={"body": "after restart"}, headers=agent()
         )
         frame = await sse.next()
-        assert json.loads(frame["data"]) == {"key": key}
+        assert json.loads(frame["data"]) == {"key": key, "project": "default"}

@@ -87,7 +87,7 @@ async def test_stream_emits_task_changed(settings, pool, delegate_client):
         assert r.status_code == 201
         frame = await sse.next()
     assert frame["event"] == "task_changed"
-    assert json.loads(frame["data"]) == {"key": key}
+    assert json.loads(frame["data"]) == {"key": key, "project": "default"}
 
 
 async def test_stream_without_bearer_is_401(settings, pool):

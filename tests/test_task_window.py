@@ -2,7 +2,12 @@
 
 from agents_taskboard.api.app import PREFIX
 
-AUTH = {"Authorization": "Bearer relay-secret", "X-Orch-Session": "s-1", "X-Orch-Slug": "mx-1"}
+AUTH = {
+    "Authorization": "Bearer relay-secret",
+    "X-Orch-Session": "s-1",
+    "X-Orch-Slug": "mx-1",
+    "X-Orch-Projects": "*",
+}
 TASKS = f"{PREFIX}/tasks"
 
 

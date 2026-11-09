@@ -7,11 +7,12 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query, Request, Response
 from psycopg_pool import AsyncConnectionPool
 
-from agents_taskboard.api.actors import Actor
+from agents_taskboard.api.actors import DEFAULT_PROJECT, Actor
 from agents_taskboard.api.errors import ApiError
 from agents_taskboard.api.schemas import CommentCreate, ListStatus, TaskCreate, TaskPatch
 from agents_taskboard.db import tasks as repo
 from agents_taskboard.labels import normalize_labels
+from agents_taskboard.projects import ProjectLookup
 from agents_taskboard.settings import Settings
 
 MAX_LIMIT = 200
@@ -34,14 +35,25 @@ def public_url(request: Request) -> str:
 
 
 async def load_one(
-    request: Request, task_id: int, window: repo.Window = repo.NO_WINDOW
+    request: Request, actor: Actor, task_id: int, window: repo.Window = repo.NO_WINDOW
 ) -> dict[str, Any]:
-    """The full task JSON, or 404."""
+    """The full task JSON, or 404 (also outside the actor's projects)."""
     async with pool_of(request).connection() as conn:
-        found = await repo.load_tasks(conn, [task_id], public_url(request), window)
+        found = await repo.load_tasks(conn, actor, [task_id], public_url(request), window)
     if not found:
         raise ApiError(404, "not_found", f"no task T-{task_id}")
     return found[0]
+
+
+async def require_target(request: Request, actor: Actor, project: str) -> None:
+    """A create or move into `project`: 403 `project_forbidden` outside the actor's scope, 422
+    when the orchestrator does not know it or it is archived. `default` always exists and
+    cannot be archived, so it is not looked up."""
+    if not actor.may_use(project):
+        raise ApiError(403, "project_forbidden", f"project {project} is outside your projects")
+    if project != DEFAULT_PROJECT:
+        lookup: ProjectLookup = request.app.state.projects
+        await lookup.require_active(project)
 
 
 def _resolve_assignee(body: TaskCreate | TaskPatch, actor: Actor) -> tuple[bool, str | None]:
@@ -62,6 +74,8 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
         body: TaskCreate, request: Request, response: Response, actor: ActorDep
     ) -> dict[str, Any]:
         _, assignee = _resolve_assignee(body, actor)
+        project = body.project or actor.default_project()
+        await require_target(request, actor, project)
         new = repo.NewTask(
             title=body.title,
             body=body.body,
@@ -70,18 +84,20 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
             labels=body.labels,
             assignee_session=assignee,
             client_key=body.client_key,
+            project=project,
         )
         async with pool_of(request).connection() as conn:
             task_id, created = await repo.create_task(conn, actor, new)
         if not created:
             response.status_code = 200
-        return await load_one(request, task_id)
+        return await load_one(request, actor, task_id)
 
     @router.get("/tasks")
     async def list_tasks(
         request: Request,
         actor: ActorDep,
         status: ListStatus = "active",
+        project: str | None = None,
         session: str | None = None,
         mine: bool = False,
         waiting: bool = False,
@@ -103,6 +119,8 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
             async with pool_of(request).connection() as conn:
                 ids, next_cursor = await repo.list_task_ids(
                     conn,
+                    actor,
+                    project=project,
                     status=status,
                     session=session,
                     waiting=waiting,
@@ -110,7 +128,7 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
                     limit=limit,
                     cursor=cursor,
                 )
-                items = await repo.load_tasks(conn, ids, public_url(request))
+                items = await repo.load_tasks(conn, actor, ids, public_url(request))
         except repo.BadCursor as exc:
             raise ApiError(422, "invalid_request", str(exc)) from None
         return {"items": items, "next_cursor": next_cursor}
@@ -126,7 +144,7 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
         comments_before: Annotated[int | None, Query(ge=1)] = None,
     ) -> dict[str, Any]:
         window = repo.Window(events_limit, events_before, comments_limit, comments_before)
-        return await load_one(request, task_id_of(key), window)
+        return await load_one(request, actor, task_id_of(key), window)
 
     @router.patch("/tasks/{key}")
     async def patch_task(
@@ -134,7 +152,7 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
     ) -> dict[str, Any]:
         task_id = task_id_of(key)
         changes: dict[str, Any] = {}
-        for field in ("title", "body", "status", "labels"):
+        for field in ("title", "body", "status", "labels", "project"):
             if field in body.model_fields_set:
                 value = getattr(body, field)
                 if value is None:
@@ -145,6 +163,10 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
             changes["assignee_session"] = assignee
         if not changes:
             raise ApiError(422, "invalid_request", "no fields to change")
+        if "project" in changes:
+            current = await load_one(request, actor, task_id)
+            if changes["project"] != current["project"]:
+                await require_target(request, actor, changes["project"])
         try:
             async with pool_of(request).connection() as conn:
                 await repo.patch_task(conn, actor, task_id, body.version, changes)
@@ -152,7 +174,7 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
             raise ApiError(404, "not_found", f"no task {key}") from None
         except repo.StaleVersion:
             raise ApiError(412, "stale_version", "task changed since it was read") from None
-        return await load_one(request, task_id)
+        return await load_one(request, actor, task_id)
 
     @router.post("/tasks/{key}/comments", status_code=201)
     async def add_comment(
@@ -164,6 +186,6 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
                 await repo.add_comment(conn, actor, task_id, body.body)
         except repo.NotFound:
             raise ApiError(404, "not_found", f"no task {key}") from None
-        return await load_one(request, task_id)
+        return await load_one(request, actor, task_id)
 
     return router

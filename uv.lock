@@ -4,8 +4,8 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "agents-common"
-version = "0.7.0"
-source = { git = "https://github.com/szymonrychu/agents-common?rev=v0.7.0#9eeaba84f71bb657b195d1742a5fb47177ff997a" }
+version = "0.12.0"
+source = { git = "https://github.com/szymonrychu/agents-common?rev=v0.12.0#233c87cd9f3f7f3f404c1c98888b5b6468beb186" }
 dependencies = [
     { name = "httpx" },
     { name = "jinja2" },
@@ -38,7 +38,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agents-common", git = "https://github.com/szymonrychu/agents-common?rev=v0.7.0" },
+    { name = "agents-common", git = "https://github.com/szymonrychu/agents-common?rev=v0.12.0" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "psycopg", extras = ["binary", "pool"] },

@@ -33,7 +33,7 @@ Every process reads one validated `TASKBOARD_*` environment. A bad or missing va
 | Variable | Default | Meaning |
 |---|---|---|
 | `TASKBOARD_DATABASE_URL` | required | Postgres DSN of the service's own database |
-| `TASKBOARD_ORCHESTRATOR_URL` | required | orchestrator service port the notifier messages sessions through |
+| `TASKBOARD_ORCHESTRATOR_URL` | required | orchestrator service port the notifier messages sessions through and the listeners validate projects against (`GET /api/v1/projects/{slug}`) |
 | `TASKBOARD_ORCHESTRATOR_TOKEN` | - | orchestrator service token; exactly one of this and the `_FILE` variable is required |
 | `TASKBOARD_ORCHESTRATOR_TOKEN_FILE` | - | path of a file holding the token |
 | `TASKBOARD_PUBLIC_BASE_URL` | required | absolute http(s) base of the task links in notices |
@@ -51,17 +51,19 @@ Every process reads one validated `TASKBOARD_*` environment. A bad or missing va
 
 ## API
 
-Base path `/taskboard/api/v1`. JSON in and out. The web listener refuses any socket peer outside `TASKBOARD_ALLOWED_CIDRS` with `403 forbidden` (forwarding headers are never read); the service listener answers `401 unauthorized` unless `Authorization: Bearer <relay token>` matches and takes the acting agent from the `X-Orch-Session` (required, `400 actor_required`) and `X-Orch-Slug` headers. `GET /healthz` and `GET /readyz` (`503 not_ready` when the database is unreachable) are outside the base path and exempt from both gates. The service listener serves every route below except the answer route and the stream. The delegate listener serves exactly the routes of the web listener (including the answer route and the stream) as the user actor, behind `Authorization: Bearer <delegate token>` (`401 unauthorized` otherwise; the relay token does not open it); it has no ingress path and no oauth2 admission, and ask and withdraw still refuse a user (`403 agent_required`). `agents-app-connector` is its client. Its error statuses follow `openapi.json` except `401` replaces `403 forbidden`. The machine-readable contract of the web listener is `openapi.json`, regenerated with `uv run python -m agents_taskboard.api.openapi > openapi.json`; a test fails when it drifts from the app or when a route is missing from this section.
+Base path `/taskboard/api/v1`. JSON in and out. The web listener refuses any socket peer outside `TASKBOARD_ALLOWED_CIDRS` with `403 forbidden` (forwarding headers are never read); the service listener answers `401 unauthorized` unless `Authorization: Bearer <relay token>` matches and takes the acting agent from the `X-Orch-Session` (required, `400 actor_required`), `X-Orch-Slug` and `X-Orch-Projects` (required, `*` or one project slug, `400 actor_required` when missing or malformed) headers. `GET /healthz` and `GET /readyz` (`503 not_ready` when the database is unreachable) are outside the base path and exempt from both gates. The service listener serves every route below except the answer route and the stream. The delegate listener serves exactly the routes of the web listener (including the answer route and the stream) as the user actor, behind `Authorization: Bearer <delegate token>` (`401 unauthorized` otherwise; the relay token does not open it); it has no ingress path and no oauth2 admission, and ask and withdraw still refuse a user (`403 agent_required`). `agents-app-connector` is its client. Its error statuses follow `openapi.json` except `401` replaces `403 forbidden`. The machine-readable contract of the web listener is `openapi.json`, regenerated with `uv run python -m agents_taskboard.api.openapi > openapi.json`; a test fails when it drifts from the app or when a route is missing from this section.
+
+Projects: every task belongs to one project (a slug owned by the orchestrator; existing tasks are in `default`). The relay's `X-Orch-Projects` is the agent's scope: `*` is every project, a slug only that project. Web and delegate callers see every project. A task, todo item or decision outside the scope answers `404 not_found` with the same body as an unknown key; lists and cursors only ever return tasks of the scope; a create or move into a project outside the scope is `403 project_forbidden`. A create or move into a project other than `default` is validated against the orchestrator: `422 unknown_project`, `422 project_archived`, `503 upstream_unavailable` when it cannot answer (an active project is cached for 60 s).
 
 Task keys look like `T-5`. Statuses: `idea`, `open`, `in_progress`, `done`, `dropped`; kinds: `idea`, `task`. A task carries a `version`; `PATCH` needs it and answers `412 stale_version` when the task changed. Labels are normalised (trimmed, lowercase, `[a-z0-9-_.:]`, at most 40 characters, at most 20).
 
 ### `GET /taskboard/api/v1/tasks`
 
-List tasks. Query: `status` (`active` default, `done`, `dropped`, `all`), `session`, `mine` (service listener, the acting session), `waiting` (only tasks with an open decision), `label` (repeatable, any match), `limit` (1..200, default 50), `cursor`. Returns `{"items": [...], "next_cursor": "..."|null}`.
+List tasks. Query: `status` (`active` default, `done`, `dropped`, `all`), `project`, `session`, `mine` (service listener, the acting session), `waiting` (only tasks with an open decision), `label` (repeatable, any match), `limit` (1..200, default 50), `cursor`. Returns `{"items": [...], "next_cursor": "..."|null}`.
 
 ### `POST /taskboard/api/v1/tasks`
 
-Create an idea or task: `title`, `body`, `kind`, `status`, `labels`, `assignee_session` or `assignee_self` (agents), `client_key`. `201` with the task; a repeated `client_key` of the same creator answers `200` with the existing task.
+Create an idea or task: `title`, `body`, `kind`, `status`, `labels`, `assignee_session` or `assignee_self` (agents), `client_key`, `project` (default: the agent's one project; `default` for a `*` agent and users). `201` with the task; a repeated `client_key` of the same creator answers `200` with the existing task.
 
 ### `GET /taskboard/api/v1/tasks/{key}`
 
@@ -69,7 +71,7 @@ One task with its labels, comments, todo, decisions and history. `404 not_found`
 
 ### `PATCH /taskboard/api/v1/tasks/{key}`
 
-Change `title`, `body`, `status`, `labels`, `assignee_session` or `assignee_self`; `version` is required. `412 stale_version` when the task changed, `422 invalid_request` when nothing changes.
+Change `title`, `body`, `status`, `labels`, `project` (a move, logged as `project_changed`), `assignee_session` or `assignee_self`; `version` is required. `412 stale_version` when the task changed, `422 invalid_request` when nothing changes.
 
 ### `POST /taskboard/api/v1/tasks/{key}/comments`
 
@@ -95,18 +97,24 @@ Withdraw an open decision (the asking session only, `403 forbidden` otherwise). 
 
 Answer an open decision as the user: `choice` (option index) or `text`, plus an optional `note`. Web listener only. `409 already_answered` when answered or withdrawn; of two simultaneous answers exactly one wins.
 
+### `GET /taskboard/api/v1/projects/summary`
+
+Per project in the caller's scope: `[{"project", "open_tasks", "waiting_decisions", "specs": {"draft": 0, "review": 0, "approved": 0}}]`, one grouped query ordered by project. `open_tasks` counts tasks that are not `done` or `dropped`; `waiting_decisions` counts open decisions; the spec counts are zero until specs exist. Optional `project` narrows it to one project. A relay caller sees only its own project (all with `X-Orch-Projects: *`); web and delegate callers see every project. Served on all three listeners.
+
 ### `GET /taskboard/api/v1/stream`
 
-Server-sent events (web listener only): `task_changed` with data `{"key": "T-5"}` whenever a task changes. A notification is a hint; the stream also polls every 5 seconds, and a client refetches the task.
+Server-sent events (web listener only): `task_changed` with data `{"key": "T-5", "project": "default"}` whenever a task changes; the optional `project` query parameter delivers only that project's changes. A notification is a hint; the stream also polls every 5 seconds, and a client refetches the task.
 
 ### Errors
 
-Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `not_found` (404), `method_not_allowed` (405), `already_answered` and `not_open` (409), `stale_version` (412), `invalid_request` (422; body or query fails validation) and `not_ready` (503).
+Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `not_found` (404), `method_not_allowed` (405), `already_answered` and `not_open` (409), `stale_version` (412), `invalid_request`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
 
 ## Notices
 
-A notice wakes a session through the orchestrator messages api. It is created when a decision a session asked is answered, and when a label added to a task matches a label of an active session (once per task and session, never for the creator). The text carries only the task key and the link `TASKBOARD_PUBLIC_BASE_URL/tasks/<key>`, never task content. Delivery is at least once: a crash between the send and the commit re-sends. A `404` from the orchestrator (session gone) ends the notice; any other failure retries with a per-notice backoff.
+A notice wakes a session through the orchestrator messages api. It is created when a decision a session asked is answered, and when a label added to a task matches a label of an active session (once per task and session, never for the creator). The lookup asks the orchestrator for sessions of the task's project plus superleaders (`project=<task project>&superleaders=include`), so a label notice never reaches another project's non-superleader session. The text carries only the task key and the link `TASKBOARD_PUBLIC_BASE_URL/tasks/<key>`, never task content. Delivery is at least once: a crash between the send and the commit re-sends. A `404` from the orchestrator (session gone) ends the notice; any other failure retries with a per-notice backoff.
 
 ## Deployment
+
+Deploy order: the taskboard must deploy after the orchestrator release that sends `X-Orch-Projects` (agents-orchestrator PR #94); the relay listener answers `400 actor_required` without that header.
 
 The image is `harbor.szymonrichert.pl/containers/agents-taskboard` and the chart `chart/agents-taskboard` (three Deployments: `web`, `service`, `notifier`, plus an optional fourth `delegate` that renders only when `delegateTokens` or `delegateExistingSecret` is set, with its own `<release>-delegate` Service on port 8003 and never an ingress path; every Deployment has a `migrate` init container). CI builds, tests and publishes both; the `release` job on main tags the image and the repository `vX.Y.Z` from the conventional commits since the last tag (`scripts/next_version.py`). The ingress routes only `/taskboard` to the web service; the relay api stays in the cluster.

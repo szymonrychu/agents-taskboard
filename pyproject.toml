@@ -5,7 +5,7 @@ description = "Tasks, decisions, todo, comments and history for users and agents
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "agents-common @ git+https://github.com/szymonrychu/agents-common@v0.7.0",
+    "agents-common @ git+https://github.com/szymonrychu/agents-common@v0.12.0",
     "fastapi",
     "uvicorn[standard]",
     "httpx",

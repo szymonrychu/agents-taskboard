@@ -19,6 +19,7 @@ def new(**over):
         labels=[],
         assignee_session=None,
         client_key=None,
+        project="default",
     )
     return repo.NewTask(**{**base, **over})
 

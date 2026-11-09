@@ -21,16 +21,17 @@ async def append_event(
     kind: str,
     detail: dict[str, Any] | None = None,
 ) -> None:
+    """Log one event of the task, stamped with the task's current project."""
     await conn.execute(
-        "INSERT INTO events (task_id, actor_kind, actor_session, actor_slug, kind, detail)"
-        " VALUES (%s, %s, %s, %s, %s, %s)",
+        "INSERT INTO events (task_id, project, actor_kind, actor_session, actor_slug, kind,"
+        " detail) SELECT t.id, t.project, %s, %s, %s, %s, %s FROM tasks t WHERE t.id = %s",
         (
-            task_id,
             actor.kind,
             actor.session_id,
             actor.slug,
             kind,
             Jsonb(detail) if detail else None,
+            task_id,
         ),
     )
 
@@ -46,19 +47,20 @@ class LabelEvent:
     task_id: int
     labels: list[str]
     actor_session: str | None
+    project: str
 
 
 async def claim_label_event(conn: psycopg.AsyncConnection) -> LabelEvent | None:
     """Lock the oldest unscanned `label_added` event no other notifier holds. The caller keeps
     the transaction open until `mark_scanned`, so a second notifier skips the row."""
     cur = await conn.execute(
-        "SELECT e.id, e.task_id, e.detail->'labels', e.actor_session"
-        " FROM events e"
+        "SELECT e.id, e.task_id, e.detail->'labels', e.actor_session, t.project"
+        " FROM events e JOIN tasks t ON t.id = e.task_id"
         " WHERE e.kind = 'label_added' AND e.scanned_at IS NULL"
         " ORDER BY e.id LIMIT 1 FOR UPDATE OF e SKIP LOCKED"
     )
     row = await cur.fetchone()
-    return LabelEvent(row[0], row[1], row[2] or [], row[3]) if row else None
+    return LabelEvent(row[0], row[1], row[2] or [], row[3], row[4]) if row else None
 
 
 async def mark_scanned(conn: psycopg.AsyncConnection, event_id: int) -> bool:

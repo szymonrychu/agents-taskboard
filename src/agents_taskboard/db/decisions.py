@@ -18,12 +18,13 @@ from psycopg.types.json import Jsonb
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.db.events import append_event, notify_changed
 from agents_taskboard.db.notices import enqueue_decision_notice
-from agents_taskboard.db.tasks import NotFound, task_key, task_url
+from agents_taskboard.db.scope import scoped
+from agents_taskboard.db.tasks import task_key, task_url, touch_task
 
 USER = Actor(kind="user")
 _COLUMNS = (
-    "id, task_id, asking_session, asking_slug, question, context, options, client_key,"
-    " status, answer, note, created_at, answered_at"
+    "d.id, d.task_id, d.asking_session, d.asking_slug, d.question, d.context, d.options,"
+    " d.client_key, d.status, d.answer, d.note, d.created_at, d.answered_at"
 )
 
 
@@ -52,18 +53,18 @@ class Decision:
         return out
 
 
-async def get_decision(conn: psycopg.AsyncConnection, decision_id: int) -> Decision | None:
+async def get_decision(
+    conn: psycopg.AsyncConnection, actor: Actor, decision_id: int
+) -> Decision | None:
+    """The decision, or None when it is absent or its task is outside the actor's projects."""
+    scope, scope_params = scoped(actor)
     cur = conn.cursor(row_factory=class_row(Decision))
-    await cur.execute(f"SELECT {_COLUMNS} FROM decisions WHERE id = %s", (decision_id,))
-    return await cur.fetchone()
-
-
-async def _touch(conn: psycopg.AsyncConnection, task_id: int) -> None:
-    cur = await conn.execute(
-        "UPDATE tasks SET updated_at = now() WHERE id = %s RETURNING id", (task_id,)
+    await cur.execute(
+        f"SELECT {_COLUMNS} FROM decisions d JOIN tasks t ON t.id = d.task_id"
+        f" WHERE d.id = %s{scope}",
+        (decision_id, *scope_params),
     )
-    if await cur.fetchone() is None:
-        raise NotFound
+    return await cur.fetchone()
 
 
 async def ask_decision(
@@ -76,10 +77,11 @@ async def ask_decision(
     client_key: str | None,
 ) -> tuple[Decision, bool]:
     """Insert an open decision; returns (decision, created). A replayed (task, asking session,
-    client key) returns the existing decision. Raises NotFound for an absent task."""
+    client key) returns the existing decision. Raises NotFound for an absent task or one outside
+    the actor's projects."""
     assert actor.session_id is not None
     async with conn.transaction():
-        await _touch(conn, task_id)
+        await touch_task(conn, actor, task_id)
         cur = await conn.execute(
             "INSERT INTO decisions (task_id, asking_session, asking_slug, question, context,"
             " options, client_key, status) VALUES (%s, %s, %s, %s, %s, %s, %s, 'open')"
@@ -108,7 +110,7 @@ async def ask_decision(
         if created:
             await append_event(conn, task_id, actor, "decision_asked", {"decision_id": decision_id})
             await notify_changed(conn, task_id)
-        decision = await get_decision(conn, decision_id)
+        decision = await get_decision(conn, actor, decision_id)
         assert decision is not None
         return decision, created
 
@@ -117,22 +119,24 @@ async def withdraw_decision(
     conn: psycopg.AsyncConnection, actor: Actor, decision_id: int, task_id: int
 ) -> Decision | None:
     """Withdraw an open decision of the task asked by the actor's session; None when no row
-    matched."""
+    matched (also when the task is outside the actor's projects)."""
+    scope, scope_params = scoped(actor)
     async with conn.transaction():
         cur = await conn.execute(
-            "UPDATE decisions SET status = 'withdrawn'"
-            " WHERE id = %s AND task_id = %s AND status = 'open' AND asking_session = %s"
-            " RETURNING task_id",
-            (decision_id, task_id, actor.session_id),
+            "UPDATE decisions d SET status = 'withdrawn' FROM tasks t"
+            " WHERE d.id = %s AND d.task_id = %s AND d.status = 'open'"
+            f" AND d.asking_session = %s AND t.id = d.task_id{scope}"
+            " RETURNING d.task_id",
+            (decision_id, task_id, actor.session_id, *scope_params),
         )
         row = await cur.fetchone()
         if row is None:
             return None
         task_id = row[0]
-        await _touch(conn, task_id)
+        await touch_task(conn, actor, task_id)
         await append_event(conn, task_id, actor, "decision_withdrawn", {"decision_id": decision_id})
         await notify_changed(conn, task_id)
-        return await get_decision(conn, decision_id)
+        return await get_decision(conn, actor, decision_id)
 
 
 async def answer_decision(
@@ -150,8 +154,8 @@ async def answer_decision(
         if row is None:
             return None
         asking_session, task_id = row
-        await _touch(conn, task_id)
+        await touch_task(conn, USER, task_id)
         await append_event(conn, task_id, USER, "decision_answered", {"decision_id": decision_id})
         await enqueue_decision_notice(conn, task_id, asking_session)
         await notify_changed(conn, task_id)
-        return await get_decision(conn, decision_id)
+        return await get_decision(conn, USER, decision_id)

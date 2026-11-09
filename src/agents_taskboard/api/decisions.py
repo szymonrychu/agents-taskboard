@@ -46,7 +46,7 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
             decision = await repo.withdraw_decision(conn, actor, decision_id, task_id)
             if decision is not None:
                 return decision.as_json(public_url(request))
-            current = await repo.get_decision(conn, decision_id)
+            current = await repo.get_decision(conn, actor, decision_id)
         if current is None or current.task_id != task_id:
             raise ApiError(404, "not_found", f"no decision {decision_id} on {key}")
         if current.asking_session != actor.session_id:
@@ -61,7 +61,7 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
         ) -> dict[str, Any]:
             task_id = task_id_of(key)
             async with pool_of(request).connection() as conn:
-                current = await repo.get_decision(conn, decision_id)
+                current = await repo.get_decision(conn, actor, decision_id)
                 if current is None or current.task_id != task_id:
                     raise ApiError(404, "not_found", f"no decision {decision_id} on {key}")
                 if body.choice is not None:
