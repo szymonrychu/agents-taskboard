@@ -6,8 +6,9 @@ import json
 
 import httpx
 import pytest
-from agents_taskboard.projects import ProjectLookup
 from test_api_tasks import S1, TASKS, agent
+
+from agents_taskboard.projects import ProjectLookup
 
 ORCH = "http://orch.test"
 PROJECTS = {"default": False, "a": False, "b": False, "old": True}
@@ -279,3 +280,26 @@ async def test_unreachable_orchestrator_503(web_client):
     web_client.app.state.projects = ProjectLookup(ORCH, "t", transport=httpx.MockTransport(down))
     r = await web_client.post(TASKS, json={"title": "t", "project": "a"})
     assert (r.status_code, r.json()["error"]["code"]) == (503, "upstream_unavailable")
+
+
+async def test_patch_unchanged_archived_project_ok_move_into_archived_422(service_client, conn):
+    task = await make_task(service_client, "a")
+    conn.execute("UPDATE tasks SET project = 'old' WHERE id = %s", (int(task["key"][2:]),))
+    url = f"{TASKS}/{task['key']}"
+    r = await service_client.patch(
+        url, json={"version": 1, "project": "old", "title": "renamed"}, headers=scope("*")
+    )
+    assert r.status_code == 200, r.text
+    assert (r.json()["title"], r.json()["project"]) == ("renamed", "old")
+    other = await make_task(service_client, "a")
+    r = await service_client.patch(
+        f"{TASKS}/{other['key']}", json={"version": 1, "project": "old"}, headers=scope("*")
+    )
+    assert (r.status_code, r.json()["error"]["code"]) == (422, "project_archived")
+
+
+async def test_agent_create_without_project_checks_its_own_project(service_client):
+    r = await service_client.post(TASKS, json={"title": "t"}, headers=scope("a"))
+    assert (r.status_code, r.json()["project"]) == (201, "a")
+    r = await service_client.post(TASKS, json={"title": "t"}, headers=scope("old"))
+    assert (r.status_code, r.json()["error"]["code"]) == (422, "project_archived")

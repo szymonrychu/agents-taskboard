@@ -164,7 +164,9 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
         if not changes:
             raise ApiError(422, "invalid_request", "no fields to change")
         if "project" in changes:
-            await require_target(request, actor, changes["project"])
+            current = await load_one(request, actor, task_id)
+            if changes["project"] != current["project"]:
+                await require_target(request, actor, changes["project"])
         try:
             async with pool_of(request).connection() as conn:
                 await repo.patch_task(conn, actor, task_id, body.version, changes)
