@@ -117,5 +117,4 @@ A notice wakes a session through the orchestrator messages api. It is created wh
 
 Deploy order: the taskboard must deploy after the orchestrator release that sends `X-Orch-Projects` (agents-orchestrator PR #94); the relay listener answers `400 actor_required` without that header.
 
-
 The image is `harbor.szymonrichert.pl/containers/agents-taskboard` and the chart `chart/agents-taskboard` (three Deployments: `web`, `service`, `notifier`, plus an optional fourth `delegate` that renders only when `delegateTokens` or `delegateExistingSecret` is set, with its own `<release>-delegate` Service on port 8003 and never an ingress path; every Deployment has a `migrate` init container). CI builds, tests and publishes both; the `release` job on main tags the image and the repository `vX.Y.Z` from the conventional commits since the last tag (`scripts/next_version.py`). The ingress routes only `/taskboard` to the web service; the relay api stays in the cluster.

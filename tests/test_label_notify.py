@@ -350,3 +350,43 @@ async def test_label_notice_only_same_project_and_superleaders(
     assert first.query_params["superleaders"] == "include"
     assert second.query_params["project"] == "default"
     assert second.query_params["superleaders"] == "include"
+
+
+async def test_unknown_project_422_marks_scanned_and_next_event_proceeds(
+    service_client, pool, conn, fake
+):
+    sid = live(fake, "one")
+    await create(service_client, labels=["one"])
+    await create(service_client, labels=["one"])
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(422, json={"detail": "unknown project"})
+        return httpx.Response(200, json=[{"id": sid, "labels": ["one"], "desired": "active"}])
+
+    lk = mock_lookup(handler)
+    try:
+        assert await scan_all(pool, lk) == 2
+    finally:
+        await lk.aclose()
+    assert len(calls) == 2
+    assert conn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'label_added' AND scanned_at IS NULL"
+    ).fetchone() == (0,)
+    assert len(label_notices(conn)) == 1
+
+
+async def test_503_lookup_still_retries(service_client, pool, conn, fake):
+    await create(service_client, labels=["one"])
+    lk = mock_lookup(lambda r: httpx.Response(503))
+    try:
+        with pytest.raises(OrchestratorUnavailable):
+            async with pool.connection() as c:
+                await scan_label_events(c, lk)
+    finally:
+        await lk.aclose()
+    assert conn.execute(
+        "SELECT count(*) FROM events WHERE kind = 'label_added' AND scanned_at IS NULL"
+    ).fetchone() == (1,)

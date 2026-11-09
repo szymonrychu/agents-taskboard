@@ -68,7 +68,8 @@ class SessionLookup:
 
     async def live_session_ids(self, labels: list[str], project: str) -> list[str]:
         """Ids of live sessions carrying any of `labels` that are in `project` or are
-        superleaders; OrchestratorUnavailable on any failure, so the caller retries."""
+        superleaders; OrchestratorUnavailable on any failure, so the caller retries. A 422 (project
+        unknown to the orchestrator) is not retryable: no sessions."""
         path = "/api/v1/sessions"
         try:
             resp = await self._http.get(
@@ -81,6 +82,9 @@ class SessionLookup:
             )
         except httpx.HTTPError as exc:
             raise OrchestratorUnavailable(f"GET {path}: {exc!r}") from exc
+        if resp.status_code == 422:
+            log.warning("label lookup: project %r unknown to the orchestrator, no notices", project)
+            return []
         if resp.status_code != 200:
             raise OrchestratorUnavailable(f"GET {path}: HTTP {resp.status_code}")
         wanted = set(labels)
