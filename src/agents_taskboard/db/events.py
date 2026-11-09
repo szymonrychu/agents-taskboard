@@ -21,16 +21,17 @@ async def append_event(
     kind: str,
     detail: dict[str, Any] | None = None,
 ) -> None:
+    """Log one event of the task, stamped with the task's current project."""
     await conn.execute(
-        "INSERT INTO events (task_id, actor_kind, actor_session, actor_slug, kind, detail)"
-        " VALUES (%s, %s, %s, %s, %s, %s)",
+        "INSERT INTO events (task_id, project, actor_kind, actor_session, actor_slug, kind,"
+        " detail) SELECT t.id, t.project, %s, %s, %s, %s, %s FROM tasks t WHERE t.id = %s",
         (
-            task_id,
             actor.kind,
             actor.session_id,
             actor.slug,
             kind,
             Jsonb(detail) if detail else None,
+            task_id,
         ),
     )
 

@@ -25,6 +25,7 @@ from agents_taskboard.api.stream import DEFAULT_POLL_SECONDS, ListenFn, TaskChan
 from agents_taskboard.api.stream import build_router as build_stream_router
 from agents_taskboard.api.tasks import build_router
 from agents_taskboard.api.todos import build_router as build_todo_router
+from agents_taskboard.projects import ProjectLookup
 from agents_taskboard.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -70,6 +71,18 @@ def _base_app(settings: Settings, pool: AsyncConnectionPool, title: str) -> Fast
     app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.pool = pool
+    app.state.projects = ProjectLookup(
+        settings.orchestrator_url, settings.orchestrator_token.get_secret_value()
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            await app.state.projects.aclose()
+
+    app.router.lifespan_context = lifespan
 
     @app.exception_handler(ApiError)
     async def _api_error(_: Request, exc: ApiError) -> JSONResponse:
@@ -125,6 +138,7 @@ def _user_app(
             yield
         finally:
             await app.state.hub.stop()
+            await app.state.projects.aclose()
 
     app.router.lifespan_context = lifespan
     app.include_router(build_stream_router(), prefix=PREFIX)

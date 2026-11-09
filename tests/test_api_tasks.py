@@ -10,8 +10,8 @@ S3 = "33333333-3333-3333-3333-333333333333"
 TASKS = f"{PREFIX}/tasks"
 
 
-def agent(session: str = S1, slug: str | None = "mx-1") -> dict[str, str]:
-    headers = {**AUTH, "X-Orch-Session": session}
+def agent(session: str = S1, slug: str | None = "mx-1", projects: str = "*") -> dict[str, str]:
+    headers = {**AUTH, "X-Orch-Session": session, "X-Orch-Projects": projects}
     if slug:
         headers["X-Orch-Slug"] = slug
     return headers
@@ -63,6 +63,7 @@ async def test_create_returns_full_task_shape(service_client):
     assert task["key"].startswith("T-")
     assert set(task) == {
         "key",
+        "project",
         "title",
         "body",
         "kind",
@@ -85,6 +86,7 @@ async def test_create_returns_full_task_shape(service_client):
     }
     assert task["url"] == f"https://tasks.example.test/tasks/{task['key']}"
     assert (task["kind"], task["status"], task["version"]) == ("task", "open", 1)
+    assert task["project"] == "default"
     assert task["blocked"] is False
     assert task["todo"] == [] and task["decisions"] == [] and task["comments"] == []
     assert task["events"][0]["kind"] == "created"

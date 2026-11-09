@@ -1,3 +1,6 @@
+import hashlib
+from importlib import resources
+
 import psycopg
 import pytest
 from agents_common.db.migrate import run_migrations
@@ -48,7 +51,7 @@ def add_notice(conn, task_id, session="s1", reason="decision", status="pending")
 
 
 def test_applies_twice_idempotent(empty_db_url):
-    assert run_migrations(empty_db_url, PACKAGE) == ["0001_taskboard.sql"]
+    assert run_migrations(empty_db_url, PACKAGE) == ["0001_taskboard.sql", "0002_projects.sql"]
     assert run_migrations(empty_db_url, PACKAGE) == []
     with psycopg.connect(empty_db_url) as conn:
         tables = {
@@ -200,3 +203,38 @@ def test_todo_status_check(conn):
             "INSERT INTO todo_items (task_id, text, status, position) VALUES (%s, 'x', %s, 0)",
             (task, status),
         )
+
+
+def test_migration_backfills_default(empty_db_url):
+    """Tasks and events written under 0001 get project `default` from 0002."""
+    first = (resources.files(PACKAGE) / "migrations" / "0001_taskboard.sql").read_text()
+    with psycopg.connect(empty_db_url, autocommit=True) as conn:
+        conn.execute(first)
+        conn.execute(
+            "CREATE TABLE schema_migrations (package text NOT NULL, name text NOT NULL,"
+            " checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now(),"
+            " PRIMARY KEY (package, name))"
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations (package, name, checksum) VALUES (%s, %s, %s)",
+            (PACKAGE, "0001_taskboard.sql", hashlib.sha256(first.encode()).hexdigest()),
+        )
+        task = add_task(conn)
+        conn.execute(
+            "INSERT INTO events (task_id, actor_kind, kind) VALUES (%s, 'user', 'created')",
+            (task,),
+        )
+    assert run_migrations(empty_db_url, PACKAGE) == ["0002_projects.sql"]
+    with psycopg.connect(empty_db_url) as conn:
+        assert conn.execute("SELECT project FROM tasks").fetchall() == [("default",)]
+        assert conn.execute("SELECT project FROM events").fetchall() == [("default",)]
+        assert add_task(conn) and conn.execute(
+            "SELECT count(*) FROM tasks WHERE project = 'default'"
+        ).fetchone() == (2,)
+        with pytest.raises(psycopg.errors.NotNullViolation):
+            conn.execute("UPDATE tasks SET project = NULL")
+
+
+def test_tasks_project_status_index_exists(conn):
+    defs = [r[0] for r in conn.execute("SELECT indexdef FROM pg_indexes WHERE tablename = 'tasks'")]
+    assert any("(project, status)" in d for d in defs)

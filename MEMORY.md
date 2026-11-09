@@ -2,6 +2,13 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-09 - project scope (projects plan 3.6, task P9)
+
+- `tasks.project` (NOT NULL, default `default`, index `(project, status)`) and `events.project` (nullable for future task-less rows, backfilled from tasks; `append_event` stamps the task's project at write time, so a move's `project_changed` event already carries the new project).
+- The relay requires `X-Orch-Projects` (`*` or one slug; missing/blank/malformed is 400 `actor_required`), so the taskboard must deploy after the orchestrator release that sends it. Web and delegate actors keep `projects=None` (every project).
+- Scope lives in SQL, never as a pre-check: `db/scope.scoped(actor)` is appended to the task lock (`touch_task`, the patch `FOR UPDATE`), the withdraw `UPDATE ... FROM tasks`, `get_decision` (joins its task), the list query (every page, so a cursor from a `*` list cannot cross projects) and `load_tasks`. Out of scope raises the same `NotFound` as an absent row, so the 404 body equals the unknown-key body. `todos._touch` and `decisions._touch` were merged into `tasks.touch_task`.
+- Create/move target check (`api/tasks.require_target`): 403 `project_forbidden` outside the scope first (decided on the request alone, leaks nothing), then `ProjectLookup.require_active` (orchestrator `GET /api/v1/projects/{slug}` with the notifier's url and token; only active projects cached, 60 s). `default` is never looked up: it always exists and cannot be archived. A PATCH naming the task's current, archived project is 422 too (the lookup runs before the row is read).
+
 ## 2026-11-02 - label notice skips the actor; malformed orchestrator answers
 
 The label-match notifier skips the session that made the change (`events.actor_session`), not the task creator: a user adding a label to an agent-created task must notify the creator if it matches, and an agent must not be told about its own edit. `SessionLookup.live_session_ids` wraps a malformed 200 (bad JSON, wrong shapes, missing `id`) as `OrchestratorUnavailable`, so the notifier loop logs and backs off instead of crash-looping, which would also have stopped decision notices.

@@ -28,7 +28,7 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
                 await repo.replace_todo(conn, actor, task_id, items)
         except tasks_repo.NotFound:
             raise ApiError(404, "not_found", f"no task {key}") from None
-        return await load_one(request, task_id)
+        return await load_one(request, actor, task_id)
 
     @router.patch("/tasks/{key}/todo/{item_id}")
     async def patch_item(
@@ -41,6 +41,6 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
                 await repo.patch_item(conn, actor, task_id, item_id, changes)
         except tasks_repo.NotFound:
             raise ApiError(404, "not_found", f"no item {item_id} on {key}") from None
-        return await load_one(request, task_id)
+        return await load_one(request, actor, task_id)
 
     return router

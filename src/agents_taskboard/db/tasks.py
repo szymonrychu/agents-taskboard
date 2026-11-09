@@ -15,10 +15,11 @@ from psycopg.rows import dict_row
 
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.db.events import append_event, notify_changed
+from agents_taskboard.db.scope import scoped
 
 ACTIVE = ("idea", "open", "in_progress")
 _KEY = re.compile(r"T-([1-9][0-9]{0,17})")
-PATCH_FIELDS = ("title", "body", "status", "labels", "assignee_session")
+PATCH_FIELDS = ("title", "body", "status", "labels", "assignee_session", "project")
 
 
 class NotFound(Exception):
@@ -42,6 +43,7 @@ class NewTask:
     labels: list[str]
     assignee_session: str | None
     client_key: str | None
+    project: str
 
 
 def parse_key(key: str) -> int | None:
@@ -75,8 +77,8 @@ async def create_task(
                 return existing[0], False
         cur = await conn.execute(
             "INSERT INTO tasks (title, body, kind, status, labels, assignee_session,"
-            " created_by_kind, created_by_session, created_by_slug, client_key)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " created_by_kind, created_by_session, created_by_slug, client_key, project)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT DO NOTHING RETURNING id",
             (
                 new.title,
@@ -89,6 +91,7 @@ async def create_task(
                 actor.session_id,
                 actor.slug,
                 new.client_key,
+                new.project,
             ),
         )
         row = await cur.fetchone()
@@ -118,12 +121,13 @@ async def patch_task(
     changes: dict[str, Any],
 ) -> bool:
     """Apply `changes` (keys of PATCH_FIELDS) if `version` is current; returns whether anything
-    changed. Raises NotFound or StaleVersion."""
+    changed. Raises NotFound (also outside the actor's projects) or StaleVersion."""
+    scope, scope_params = scoped(actor)
     async with conn.transaction():
         cur = await conn.cursor(row_factory=dict_row).execute(
-            "SELECT version, title, body, status, labels, assignee_session"
-            " FROM tasks WHERE id = %s FOR UPDATE",
-            (task_id,),
+            "SELECT version, title, body, status, labels, assignee_session, project"
+            f" FROM tasks t WHERE t.id = %s{scope} FOR UPDATE",
+            (task_id, *scope_params),
         )
         row = await cur.fetchone()
         if row is None:
@@ -146,6 +150,14 @@ async def patch_task(
         plain = [k for k in ("title", "body", "assignee_session") if k in changed]
         if plain:
             await append_event(conn, task_id, actor, "updated", {"fields": plain})
+        if "project" in changed:
+            await append_event(
+                conn,
+                task_id,
+                actor,
+                "project_changed",
+                {"from": row["project"], "to": changed["project"]},
+            )
         if "status" in changed:
             await append_event(
                 conn,
@@ -168,13 +180,21 @@ async def patch_task(
         return True
 
 
+async def touch_task(conn: psycopg.AsyncConnection, actor: Actor, task_id: int) -> None:
+    """Bump updated_at (this also row-locks the task); NotFound when it is absent or outside
+    the actor's projects."""
+    scope, scope_params = scoped(actor)
+    cur = await conn.execute(
+        f"UPDATE tasks t SET updated_at = now() WHERE t.id = %s{scope} RETURNING t.id",
+        (task_id, *scope_params),
+    )
+    if await cur.fetchone() is None:
+        raise NotFound
+
+
 async def add_comment(conn: psycopg.AsyncConnection, actor: Actor, task_id: int, body: str) -> None:
     async with conn.transaction():
-        cur = await conn.execute(
-            "UPDATE tasks SET updated_at = now() WHERE id = %s RETURNING id", (task_id,)
-        )
-        if await cur.fetchone() is None:
-            raise NotFound
+        await touch_task(conn, actor, task_id)
         cur = await conn.execute(
             "INSERT INTO comments (task_id, author_kind, author_session, author_slug, body)"
             " VALUES (%s, %s, %s, %s, %s) RETURNING id",
@@ -204,7 +224,9 @@ _OPEN_DECISION = "EXISTS (SELECT 1 FROM decisions d WHERE d.task_id = t.id AND d
 
 async def list_task_ids(
     conn: psycopg.AsyncConnection,
+    actor: Actor,
     *,
+    project: str | None = None,
     status: str = "active",
     session: str | None = None,
     waiting: bool | None = None,
@@ -216,9 +238,14 @@ async def list_task_ids(
 
     `session` matches tasks the session is assignee of, creator of, or asked a decision on
     (open or not); `waiting` keeps tasks with an open decision (asked by `session` when given).
+    Only tasks of the actor's projects are listed, also when paging with any cursor.
     """
-    where: list[str] = []
-    params: list[Any] = []
+    scope, scope_params = scoped(actor)
+    where: list[str] = ["TRUE" + scope]
+    params: list[Any] = [*scope_params]
+    if project is not None:
+        where.append("t.project = %s")
+        params.append(project)
     if status == "active":
         where.append("t.status = ANY(%s)")
         params.append(list(ACTIVE))
@@ -252,7 +279,7 @@ async def list_task_ids(
         outer_params = []
     query = (
         f"SELECT s.id, s.blocked FROM (SELECT t.id, {_OPEN_DECISION} AS blocked FROM tasks t"
-        f" {'WHERE ' + ' AND '.join(where) if where else ''}) s {outer}"
+        f" WHERE {' AND '.join(where)}) s {outer}"
         " ORDER BY s.blocked DESC, s.id DESC LIMIT %s"
     )
     cur = await conn.execute(query, (*params, *outer_params, limit + 1))
@@ -304,23 +331,28 @@ async def _rows(
 
 async def load_tasks(
     conn: psycopg.AsyncConnection,
+    actor: Actor,
     ids: list[int],
     public_url: str,
     window: Window = NO_WINDOW,
 ) -> list[dict[str, Any]]:
-    """The task JSON for `ids`, in that order (missing ids are skipped). `window` shapes the
-    comments and events lists only; `comments_total` and `events_total` count every item."""
-    if not ids:
-        return []
+    """The task JSON for `ids`, in that order (missing ids and tasks outside the actor's
+    projects are skipped). `window` shapes the comments and events lists only;
+    `comments_total` and `events_total` count every item."""
+    scope, scope_params = scoped(actor)
     tasks = {
         r["id"]: r
         for r in await _rows(
             conn,
-            "SELECT id, title, body, kind, status, labels, assignee_session, version,"
-            " created_at, updated_at FROM tasks WHERE id = ANY(%s)",
+            "SELECT id, project, title, body, kind, status, labels, assignee_session, version,"
+            f" created_at, updated_at FROM tasks t WHERE id = ANY(%s){scope}",
             ids,
+            tuple(scope_params),
         )
     }
+    ids = [i for i in ids if i in tasks]
+    if not ids:
+        return []
     children: dict[str, dict[int, list[dict]]] = {}
     for name, query, *rest in (
         (

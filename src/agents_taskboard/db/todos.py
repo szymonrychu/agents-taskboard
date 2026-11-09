@@ -7,16 +7,7 @@ import psycopg
 
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.db.events import append_event, notify_changed
-from agents_taskboard.db.tasks import NotFound
-
-
-async def _touch(conn: psycopg.AsyncConnection, task_id: int) -> None:
-    """Bump updated_at (this also row-locks the task); NotFound if it is absent."""
-    cur = await conn.execute(
-        "UPDATE tasks SET updated_at = now() WHERE id = %s RETURNING id", (task_id,)
-    )
-    if await cur.fetchone() is None:
-        raise NotFound
+from agents_taskboard.db.tasks import NotFound, touch_task
 
 
 async def replace_todo(
@@ -24,7 +15,7 @@ async def replace_todo(
 ) -> None:
     """Replace the whole list with `items` (text, status), positions 0..n-1."""
     async with conn.transaction():
-        await _touch(conn, task_id)
+        await touch_task(conn, actor, task_id)
         await conn.execute("DELETE FROM todo_items WHERE task_id = %s", (task_id,))
         if items:
             async with conn.cursor() as cur:
@@ -44,9 +35,10 @@ async def patch_item(
     item_id: int,
     changes: dict[str, str],
 ) -> None:
-    """Change text and/or status of one item of the task. Raises NotFound."""
+    """Change text and/or status of one item of the task. Raises NotFound (also for a task
+    outside the actor's projects)."""
     async with conn.transaction():
-        await _touch(conn, task_id)
+        await touch_task(conn, actor, task_id)
         cur = await conn.execute(
             "UPDATE todo_items SET text = COALESCE(%s, text), status = COALESCE(%s, status)"
             " WHERE id = %s AND task_id = %s RETURNING id",

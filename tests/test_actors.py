@@ -7,7 +7,11 @@ from agents_taskboard.api.actors import Actor, actor_from_service, actor_from_we
 from agents_taskboard.api.app import PREFIX
 
 AUTH = {"Authorization": "Bearer relay-secret"}
-AGENT = {"X-Orch-Session": "11111111-1111-1111-1111-111111111111", "X-Orch-Slug": "mx-99"}
+AGENT = {
+    "X-Orch-Session": "11111111-1111-1111-1111-111111111111",
+    "X-Orch-Slug": "mx-99",
+    "X-Orch-Projects": "proj-a",
+}
 
 
 def mount_probe(client: httpx.AsyncClient, dependency) -> None:
@@ -15,7 +19,12 @@ def mount_probe(client: httpx.AsyncClient, dependency) -> None:
 
     @app.get(f"{PREFIX}/_probe")
     async def probe(actor: Annotated[Actor, Depends(dependency)]) -> dict:
-        return {"kind": actor.kind, "session_id": actor.session_id, "slug": actor.slug}
+        return {
+            "kind": actor.kind,
+            "session_id": actor.session_id,
+            "slug": actor.slug,
+            "projects": None if actor.projects is None else sorted(actor.projects),
+        }
 
 
 async def test_service_call_without_relay_bearer_is_401(service_client):
@@ -30,7 +39,7 @@ async def test_session_header_without_bearer_ignored_on_web(web_client):
     mount_probe(web_client, actor_from_web)
     r = await web_client.get(f"{PREFIX}/_probe", headers=AGENT)
     assert r.status_code == 200
-    assert r.json() == {"kind": "user", "session_id": None, "slug": None}
+    assert r.json() == {"kind": "user", "session_id": None, "slug": None, "projects": None}
 
 
 async def test_service_call_missing_session_header_is_400(service_client):
@@ -48,7 +57,30 @@ async def test_service_call_with_relay_bearer_reads_agent_identity(service_clien
         "kind": "agent",
         "session_id": AGENT["X-Orch-Session"],
         "slug": "mx-99",
+        "projects": ["proj-a"],
     }
+
+
+async def test_service_call_star_projects_is_every_project(service_client):
+    mount_probe(service_client, actor_from_service)
+    r = await service_client.get(
+        f"{PREFIX}/_probe", headers={**AUTH, **AGENT, "X-Orch-Projects": "*"}
+    )
+    assert r.status_code == 200
+    assert r.json()["projects"] is None
+
+
+async def test_service_call_missing_projects_header_is_400(service_client):
+    mount_probe(service_client, actor_from_service)
+    no_projects = {k: v for k, v in AGENT.items() if k != "X-Orch-Projects"}
+    for headers in (
+        no_projects,
+        {**AGENT, "X-Orch-Projects": ""},
+        {**AGENT, "X-Orch-Projects": "a,b"},
+    ):
+        r = await service_client.get(f"{PREFIX}/_probe", headers={**AUTH, **headers})
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "actor_required"
 
 
 async def test_probes_are_open_on_both_apps(web_client, service_client):
