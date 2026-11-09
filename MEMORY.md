@@ -2,12 +2,16 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-09 - label notices scoped by project (projects P10)
+
+- Label notices go only to sessions of the task's project plus superleaders. `SessionLookup.live_session_ids(labels, project)` sends `label=..&project=<task project>&superleaders=include`; the orchestrator combines the filters (label AND (project OR superleader)), and the client-side label check stays because `FakeOrchestrator` ignores query params. The project is read from the task at scan time (`claim_label_event` joins tasks), so a task moved before the scan notifies its new project. An archived project still lists in the orchestrator; an unknown one answers 422, which marks the event scanned with no notices (1fc6c49).
+
 ## 2026-11-09 - project scope (projects plan 3.6, task P9)
 
 - `tasks.project` (NOT NULL, default `default`, index `(project, status)`) and `events.project` (nullable for future task-less rows, backfilled from tasks; `append_event` stamps the task's project at write time, so a move's `project_changed` event already carries the new project).
 - The relay requires `X-Orch-Projects` (`*` or one slug; missing/blank/malformed is 400 `actor_required`), so the taskboard must deploy after the orchestrator release that sends it. Web and delegate actors keep `projects=None` (every project).
 - Scope lives in SQL, never as a pre-check: `db/scope.scoped(actor)` is appended to the task lock (`touch_task`, the patch `FOR UPDATE`), the withdraw `UPDATE ... FROM tasks`, `get_decision` (joins its task), the list query (every page, so a cursor from a `*` list cannot cross projects) and `load_tasks`. Out of scope raises the same `NotFound` as an absent row, so the 404 body equals the unknown-key body. `todos._touch` and `decisions._touch` were merged into `tasks.touch_task`.
-- Create/move target check (`api/tasks.require_target`): 403 `project_forbidden` outside the scope first (decided on the request alone, leaks nothing), then `ProjectLookup.require_active` (orchestrator `GET /api/v1/projects/{slug}` with the notifier's url and token; only active projects cached, 60 s). `default` is never looked up: it always exists and cannot be archived. A PATCH naming the task's current, archived project is 422 too (the lookup runs before the row is read).
+- Create/move target check (`api/tasks.require_target`): 403 `project_forbidden` outside the scope first (decided on the request alone, leaks nothing), then `ProjectLookup.require_active` (orchestrator `GET /api/v1/projects/{slug}` with the notifier's url and token; only active projects cached, 60 s). `default` is never looked up: it always exists and cannot be archived. The lookup runs only when the project changes, so a PATCH naming the task's current (even archived) project is 200 (4d7b5aa).
 
 ## 2026-11-02 - label notice skips the actor; malformed orchestrator answers
 
@@ -89,5 +93,4 @@ agents-common `listen` reconnects only on OperationalError/OSError; any other ex
 - Why: the MCP output budget; a task with a long history does not fit one tool answer. `GET /tasks/{key}` takes `events_limit`/`comments_limit` (0..200, newest N, oldest first) and `events_before`/`comments_before` (id cursors for paging back). Absent params return everything, so agents-web is unchanged.
 - The limit is a `row_number() OVER (PARTITION BY task_id ...)` window, so `load_tasks` stays correct for any id list (list answers, write answers), not just one task. `events_total` and `comments_total` are on every task answer and ignore windows and cursors.
 
-- 2026-11-09 (projects P10): label notices go only to sessions of the task's project plus superleaders. `SessionLookup.live_session_ids(labels, project)` sends `label=..&project=<task project>&superleaders=include`; the orchestrator combines the filters (label AND (project OR superleader)), and the client-side label check stays because `FakeOrchestrator` ignores query params. The project is read from the task at scan time (`claim_label_event` joins tasks), so a task moved before the scan notifies its new project. An archived project still lists in the orchestrator; an unknown one answers 422, which the lookup treats as unavailable (retry).
 - 2026-11-09: `GET /projects/summary` (all three listeners, scope applied in SQL) and `task_changed {key, project}` with `?project=` on the stream. The hub carries (task id, project) pairs: the poll reads `events.project`, a LISTEN hint looks the project up from tasks. Index `events (project, id)` is in 0002 (unreleased, so no new migration). agents-common pinned at v0.12.0 (v0.11.0 was the labels release); deploy after the orchestrator sends `X-Orch-Projects`.

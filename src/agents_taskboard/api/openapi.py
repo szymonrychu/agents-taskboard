@@ -43,15 +43,18 @@ ERRORS = {
     409: "the decision is not open (already_answered, not_open)",
     412: "the task changed since it was read (stale_version)",
     422: "invalid request (invalid_request)",
+    503: "the orchestrator cannot validate the project (upstream_unavailable)",
 }
+
+PROJECT_422 = "invalid request (invalid_request, unknown_project, project_archived)"
 
 ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/stream"): (403,),
     ("get", "/projects/summary"): (403,),
-    ("post", "/tasks"): (403, 422),
+    ("post", "/tasks"): (403, 422, 503),
     ("get", "/tasks"): (403, 422),
     ("get", "/tasks/{key}"): (403, 404, 422),
-    ("patch", "/tasks/{key}"): (403, 404, 412, 422),
+    ("patch", "/tasks/{key}"): (403, 404, 412, 422, 503),
     ("post", "/tasks/{key}/comments"): (403, 404, 422),
     ("put", "/tasks/{key}/todo"): (403, 404, 422),
     ("patch", "/tasks/{key}/todo/{item_id}"): (403, 404, 422),
@@ -59,6 +62,8 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("post", "/tasks/{key}/decisions/{decision_id}/withdraw"): (403, 404, 409, 422),
     ("post", "/tasks/{key}/decisions/{decision_id}/answer"): (403, 404, 409, 422),
 }
+
+PROJECT_ROUTES = {("post", "/tasks"), ("patch", "/tasks/{key}")}
 
 
 def _document() -> dict[str, Any]:
@@ -79,8 +84,11 @@ def _document() -> dict[str, Any]:
             for status in [s for s in responses if not s.startswith("2")]:
                 del responses[status]
             for status in ROUTE_ERRORS[(method, path.removeprefix(PREFIX))]:
+                project_422 = (
+                    status == 422 and (method, path.removeprefix(PREFIX)) in PROJECT_ROUTES
+                )
                 responses[str(status)] = {
-                    "description": ERRORS[status],
+                    "description": PROJECT_422 if project_422 else ERRORS[status],
                     "content": {"application/json": {"schema": ERROR_REF}},
                 }
     schemas = doc["components"]["schemas"]
