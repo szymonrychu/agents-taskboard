@@ -7,8 +7,10 @@ from agents_common.fake_orchestrator import FakeOrchestrator
 from agents_common.orchestrator import OrchestratorClient, OrchestratorUnavailable
 from test_api_tasks import S1, S2, TASKS, agent, create
 from test_notifier import PUBLIC, run_until, statuses
+from test_scope import ORCH, orchestrator
 
 from agents_taskboard.notifier import SessionLookup, run_notifier, scan_label_events
+from agents_taskboard.projects import ProjectLookup
 
 
 @pytest.fixture
@@ -300,7 +302,7 @@ async def test_malformed_200_is_orchestrator_unavailable(case):
     lk = mock_lookup(MALFORMED[case])
     try:
         with pytest.raises(OrchestratorUnavailable):
-            await lk.live_session_ids(["one"])
+            await lk.live_session_ids(["one"], "default")
     finally:
         await lk.aclose()
 
@@ -332,3 +334,19 @@ async def test_malformed_lookup_keeps_notifier_running_and_delivers_decision_not
     assert conn.execute(
         "SELECT count(*) FROM events WHERE kind = 'label_added' AND scanned_at IS NULL"
     ).fetchone() == (1,)
+
+
+async def test_label_notice_only_same_project_and_superleaders(
+    service_client, pool, conn, fake, lookup
+):
+    service_client.app.state.projects = ProjectLookup(ORCH, "t", transport=orchestrator())
+    live(fake, "x")
+    await create(service_client, headers=agent(projects="a"), labels=["x"], project="a")
+    await create(service_client, labels=["x"])
+    assert await scan_all(pool, lookup) == 2
+    first, second = lookups(fake)
+    assert first.query_params.getlist("label") == ["x"]
+    assert first.query_params["project"] == "a"
+    assert first.query_params["superleaders"] == "include"
+    assert second.query_params["project"] == "default"
+    assert second.query_params["superleaders"] == "include"

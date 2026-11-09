@@ -44,8 +44,9 @@ def notice_text(key: str, public_url: str) -> str:
 
 
 class SessionLookup:
-    """Live orchestrator sessions by label: `GET /api/v1/sessions?label=..` (repeatable, any
-    match) on the service port. agents-common's client has no such call and stays untouched.
+    """Live orchestrator sessions by label and project: `GET /api/v1/sessions?label=..`
+    (repeatable, any match)`&project=..&superleaders=include` on the service port.
+    agents-common's client has no such call and stays untouched.
     The response is a plain list (no paging)."""
 
     def __init__(
@@ -65,12 +66,19 @@ class SessionLookup:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def live_session_ids(self, labels: list[str]) -> list[str]:
-        """Ids of live sessions carrying any of `labels`; OrchestratorUnavailable on any
-        failure, so the caller retries."""
+    async def live_session_ids(self, labels: list[str], project: str) -> list[str]:
+        """Ids of live sessions carrying any of `labels` that are in `project` or are
+        superleaders; OrchestratorUnavailable on any failure, so the caller retries."""
         path = "/api/v1/sessions"
         try:
-            resp = await self._http.get(path, params=[("label", x) for x in labels])
+            resp = await self._http.get(
+                path,
+                params=[
+                    *(("label", x) for x in labels),
+                    ("project", project),
+                    ("superleaders", "include"),
+                ],
+            )
         except httpx.HTTPError as exc:
             raise OrchestratorUnavailable(f"GET {path}: {exc!r}") from exc
         if resp.status_code != 200:
@@ -88,13 +96,14 @@ class SessionLookup:
 
 async def scan_label_events(conn: psycopg.AsyncConnection, lookup: SessionLookup) -> bool | None:
     """Scan one unscanned `label_added` event: queue a label notice for every live session
-    sharing an added label, except the session that made the change. None: nothing to scan.
+    sharing an added label in the task's project (plus superleaders), except the session that
+    made the change. None: nothing to scan.
     A failed lookup raises and, with the caller's transaction rolled back, leaves the event
     unscanned (no loss; the unique index makes a re-scan duplicate-free)."""
     event = await claim_label_event(conn)
     if event is None:
         return None
-    for session_id in await lookup.live_session_ids(event.labels):
+    for session_id in await lookup.live_session_ids(event.labels, event.project):
         if session_id != event.actor_session:
             await enqueue_label_notice(conn, event.task_id, session_id)
     await mark_scanned(conn, event.id)

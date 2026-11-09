@@ -47,6 +47,7 @@ ERRORS = {
 
 ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/stream"): (403,),
+    ("get", "/projects/summary"): (403,),
     ("post", "/tasks"): (403, 422),
     ("get", "/tasks"): (403, 422),
     ("get", "/tasks/{key}"): (403, 404, 422),

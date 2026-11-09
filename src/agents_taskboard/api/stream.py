@@ -35,22 +35,22 @@ ListenFn = Callable[[str, str], AsyncIterator[str]]
 
 
 class Subscription:
-    """The task ids changed since the subscriber last looked; a set, so a slow client
-    coalesces instead of growing a queue."""
+    """The (task id, project) pairs changed since the subscriber last looked; a dict, so a
+    slow client coalesces instead of growing a queue."""
 
     def __init__(self, hub: TaskChangeHub) -> None:
         self._hub = hub
-        self._ids: set[int] = set()
+        self._ids: dict[int, str] = {}
         self._wake = asyncio.Event()
 
-    def offer(self, task_id: int) -> None:
-        self._ids.add(task_id)
+    def offer(self, task_id: int, project: str) -> None:
+        self._ids[task_id] = project
         self._wake.set()
 
-    async def get(self) -> list[int]:
+    async def get(self) -> list[tuple[int, str]]:
         await self._wake.wait()
         self._wake.clear()
-        ids, self._ids = sorted(self._ids), set()
+        ids, self._ids = sorted(self._ids.items()), {}
         return ids
 
     def close(self) -> None:
@@ -107,9 +107,15 @@ class TaskChangeHub:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-    def _publish(self, task_id: int) -> None:
+    def _publish(self, task_id: int, project: str) -> None:
         for sub in self._subs:
-            sub.offer(task_id)
+            sub.offer(task_id, project)
+
+    async def _project_of(self, task_id: int) -> str | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute("SELECT project FROM tasks WHERE id = %s", (task_id,))
+            row = await cur.fetchone()
+        return row[0] if row else None
 
     async def _listen_loop(self) -> None:
         """Run the shared LISTEN; any unexpected error restarts it after a capped backoff
@@ -124,7 +130,9 @@ class TaskChangeHub:
                     except ValueError:
                         continue
                     self._heard.add(task_id)
-                    self._publish(task_id)
+                    project = await self._project_of(task_id)
+                    if project is not None:
+                        self._publish(task_id, project)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -159,15 +167,16 @@ class TaskChangeHub:
         while True:
             async with self._pool.connection() as conn:
                 cur = await conn.execute(
-                    "SELECT id, task_id FROM events WHERE id > %s ORDER BY id LIMIT %s",
+                    "SELECT e.id, e.task_id, coalesce(e.project, 'default') FROM events e"
+                    " WHERE e.id > %s ORDER BY e.id LIMIT %s",
                     (cursor, BATCH),
                 )
                 rows = await cur.fetchall()
-            for event_id, task_id in rows:
+            for event_id, task_id, project in rows:
                 cursor = event_id
                 if task_id not in heard:
                     heard.add(task_id)
-                    self._publish(task_id)
+                    self._publish(task_id, project)
             if len(rows) < BATCH:
                 return cursor
 
@@ -176,12 +185,18 @@ def build_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/stream", response_class=EventSourceResponse)
-    async def stream(request: Request) -> AsyncIterator[ServerSentEvent]:
+    async def stream(
+        request: Request, project: str | None = None
+    ) -> AsyncIterator[ServerSentEvent]:
         sub = request.app.state.hub.subscribe()
         try:
             while True:
-                for task_id in await sub.get():
-                    yield ServerSentEvent(data={"key": task_key(task_id)}, event="task_changed")
+                for task_id, task_project in await sub.get():
+                    if project is None or project == task_project:
+                        yield ServerSentEvent(
+                            data={"key": task_key(task_id), "project": task_project},
+                            event="task_changed",
+                        )
         finally:
             sub.close()
 

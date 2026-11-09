@@ -97,9 +97,13 @@ Withdraw an open decision (the asking session only, `403 forbidden` otherwise). 
 
 Answer an open decision as the user: `choice` (option index) or `text`, plus an optional `note`. Web listener only. `409 already_answered` when answered or withdrawn; of two simultaneous answers exactly one wins.
 
+### `GET /taskboard/api/v1/projects/summary`
+
+Per project in the caller's scope: `[{"project", "open_tasks", "waiting_decisions", "specs": {"draft": 0, "review": 0, "approved": 0}}]`, one grouped query ordered by project. `open_tasks` counts tasks that are not `done` or `dropped`; `waiting_decisions` counts open decisions; the spec counts are zero until specs exist. Optional `project` narrows it to one project. A relay caller sees only its own project (all with `X-Orch-Projects: *`); web and delegate callers see every project. Served on all three listeners.
+
 ### `GET /taskboard/api/v1/stream`
 
-Server-sent events (web listener only): `task_changed` with data `{"key": "T-5"}` whenever a task changes. A notification is a hint; the stream also polls every 5 seconds, and a client refetches the task.
+Server-sent events (web listener only): `task_changed` with data `{"key": "T-5", "project": "default"}` whenever a task changes; the optional `project` query parameter delivers only that project's changes. A notification is a hint; the stream also polls every 5 seconds, and a client refetches the task.
 
 ### Errors
 
@@ -107,8 +111,11 @@ Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. 
 
 ## Notices
 
-A notice wakes a session through the orchestrator messages api. It is created when a decision a session asked is answered, and when a label added to a task matches a label of an active session (once per task and session, never for the creator). The text carries only the task key and the link `TASKBOARD_PUBLIC_BASE_URL/tasks/<key>`, never task content. Delivery is at least once: a crash between the send and the commit re-sends. A `404` from the orchestrator (session gone) ends the notice; any other failure retries with a per-notice backoff.
+A notice wakes a session through the orchestrator messages api. It is created when a decision a session asked is answered, and when a label added to a task matches a label of an active session (once per task and session, never for the creator). The lookup asks the orchestrator for sessions of the task's project plus superleaders (`project=<task project>&superleaders=include`), so a label notice never reaches another project's non-superleader session. The text carries only the task key and the link `TASKBOARD_PUBLIC_BASE_URL/tasks/<key>`, never task content. Delivery is at least once: a crash between the send and the commit re-sends. A `404` from the orchestrator (session gone) ends the notice; any other failure retries with a per-notice backoff.
 
 ## Deployment
+
+Deploy order: the taskboard must deploy after the orchestrator release that sends `X-Orch-Projects` (agents-orchestrator PR #94); the relay listener answers `400 actor_required` without that header.
+
 
 The image is `harbor.szymonrichert.pl/containers/agents-taskboard` and the chart `chart/agents-taskboard` (three Deployments: `web`, `service`, `notifier`, plus an optional fourth `delegate` that renders only when `delegateTokens` or `delegateExistingSecret` is set, with its own `<release>-delegate` Service on port 8003 and never an ingress path; every Deployment has a `migrate` init container). CI builds, tests and publishes both; the `release` job on main tags the image and the repository `vX.Y.Z` from the conventional commits since the last tag (`scripts/next_version.py`). The ingress routes only `/taskboard` to the web service; the relay api stays in the cluster.

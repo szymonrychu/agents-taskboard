@@ -7,3 +7,4 @@ CREATE INDEX IF NOT EXISTS tasks_project_status_idx ON tasks (project, status);
 
 ALTER TABLE events ADD COLUMN IF NOT EXISTS project text;
 UPDATE events e SET project = t.project FROM tasks t WHERE t.id = e.task_id AND e.project IS NULL;
+CREATE INDEX IF NOT EXISTS events_project_id_idx ON events (project, id);
