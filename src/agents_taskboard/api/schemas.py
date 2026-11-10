@@ -115,3 +115,19 @@ class DecisionAnswer(_Strict):
         if (self.choice is None) == (self.text is None or not self.text.strip()):
             raise ValueError("give exactly one of choice and a non-empty text")
         return self
+
+
+class DecisionWithdraw(_Strict):
+    reason: str = Field(min_length=1, max_length=2000)
+    superseded_by: int | None = Field(default=None, ge=1)
+    answered_elsewhere: str | None = Field(default=None, min_length=1, max_length=4000)
+
+    @model_validator(mode="after")
+    def _reason_and_one_outcome(self) -> Self:
+        if not self.reason.strip():
+            raise ValueError("reason must not be blank")
+        if self.answered_elsewhere is not None and not self.answered_elsewhere.strip():
+            raise ValueError("answered_elsewhere must not be blank")
+        if (self.superseded_by is None) == (self.answered_elsewhere is None):
+            raise ValueError("give exactly one of superseded_by and answered_elsewhere")
+        return self

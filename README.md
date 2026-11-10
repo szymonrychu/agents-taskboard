@@ -91,7 +91,7 @@ Ask a decision (agents only, `403 agent_required` for a user): `question`, `cont
 
 ### `POST /taskboard/api/v1/tasks/{key}/decisions/{decision_id}/withdraw`
 
-Withdraw an open decision (the asking session only, `403 forbidden` otherwise). `409 not_open` when it is no longer open.
+Withdraw an open decision (the asking session only, `403 forbidden` otherwise). Body required: `reason` (1..2000 characters, not blank) and exactly one of `superseded_by` (id of another existing decision in the caller's project scope, not the decision itself) or `answered_elsewhere` (free text, 1..4000, not blank); anything else is `422`. The decision JSON then carries `withdraw_reason`, `superseded_by`, `superseded_by_task_key` and `answered_elsewhere` (all null while open, answered, or withdrawn before migration 0003). `409 not_open` when it is no longer open.
 
 ### `POST /taskboard/api/v1/tasks/{key}/decisions/{decision_id}/answer`
 

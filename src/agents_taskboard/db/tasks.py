@@ -362,9 +362,12 @@ async def load_tasks(
         ),
         (
             "decisions",
-            "SELECT id, task_id, asking_session, asking_slug, question, context, options,"
-            " status, answer, note, created_at, answered_at FROM decisions"
-            " WHERE task_id = ANY(%s) ORDER BY id",
+            "SELECT d.id, d.task_id, d.asking_session, d.asking_slug, d.question, d.context,"
+            " d.options, d.status, d.answer, d.note, d.created_at, d.answered_at,"
+            " d.withdraw_reason, d.superseded_by, d.answered_elsewhere,"
+            " s.task_id AS superseded_by_task_id FROM decisions d"
+            " LEFT JOIN decisions s ON s.id = d.superseded_by"
+            " WHERE d.task_id = ANY(%s) ORDER BY d.id",
         ),
         (
             "comments",
@@ -405,6 +408,8 @@ async def load_tasks(
         waiting: dict[str, str | None] = {}
         open_count = 0
         for d in decisions:
+            target = d.pop("superseded_by_task_id")
+            d["superseded_by_task_key"] = None if target is None else task_key(target)
             if d["status"] == "open":
                 open_count += 1
                 waiting.setdefault(d["asking_session"], d["asking_slug"])
