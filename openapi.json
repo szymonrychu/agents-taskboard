@@ -230,6 +230,24 @@
         "title": "DecisionWithdraw",
         "type": "object"
       },
+      "DepsPut": {
+        "additionalProperties": false,
+        "properties": {
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Depends On",
+            "type": "array"
+          }
+        },
+        "required": [
+          "depends_on"
+        ],
+        "title": "DepsPut",
+        "type": "object"
+      },
       "DocumentBody": {
         "additionalProperties": false,
         "properties": {
@@ -743,6 +761,304 @@
           "error"
         ],
         "title": "ErrorResponse",
+        "type": "object"
+      },
+      "Gate": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "approved_versions": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Versions"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/GateDecision"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "gate": {
+            "enum": [
+              "none",
+              "waiting",
+              "open"
+            ],
+            "title": "Gate",
+            "type": "string"
+          },
+          "gate_task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Task"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "review",
+              "approved",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "status",
+          "approved_versions",
+          "gate_task",
+          "decisions",
+          "gate",
+          "approved"
+        ],
+        "title": "Gate",
+        "type": "object"
+      },
+      "GateDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "title": "Answer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "answered"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "status",
+          "answer"
+        ],
+        "title": "GateDecision",
+        "type": "object"
+      },
+      "NextStep": {
+        "additionalProperties": false,
+        "properties": {
+          "claim": {
+            "default": false,
+            "title": "Claim",
+            "type": "boolean"
+          }
+        },
+        "title": "NextStep",
+        "type": "object"
+      },
+      "Plan": {
+        "additionalProperties": false,
+        "description": "The plan header; version 0 and empty fields before the first write.",
+        "properties": {
+          "architecture": {
+            "title": "Architecture",
+            "type": "string"
+          },
+          "constraints": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Constraints",
+            "type": "array"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "review_focus": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Review Focus",
+            "type": "array"
+          },
+          "tech_stack": {
+            "title": "Tech Stack",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "goal",
+          "architecture",
+          "tech_stack",
+          "constraints",
+          "review_focus",
+          "version",
+          "updated_at",
+          "updated_by"
+        ],
+        "title": "Plan",
+        "type": "object"
+      },
+      "PlanPut": {
+        "additionalProperties": false,
+        "properties": {
+          "architecture": {
+            "default": "",
+            "title": "Architecture",
+            "type": "string"
+          },
+          "constraints": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Constraints",
+            "type": "array"
+          },
+          "goal": {
+            "default": "",
+            "title": "Goal",
+            "type": "string"
+          },
+          "review_focus": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Review Focus",
+            "type": "array"
+          },
+          "tech_stack": {
+            "default": "",
+            "title": "Tech Stack",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 0.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "PlanPut",
+        "type": "object"
+      },
+      "Ref": {
+        "additionalProperties": false,
+        "description": "What implements a plan step.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "pr",
+              "commit",
+              "branch",
+              "tag",
+              "url"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "title": "Ref",
+        "type": "object"
+      },
+      "Section": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "heading": {
+            "title": "Heading",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "version",
+          "heading",
+          "body",
+          "truncated"
+        ],
+        "title": "Section",
         "type": "object"
       },
       "SpecComment": {
@@ -1472,6 +1788,352 @@
         "title": "SpecSummary",
         "type": "object"
       },
+      "Step": {
+        "additionalProperties": false,
+        "description": "A step as listed: no body; `deps` are task keys, `ready` when open and every dependency\nis done or dropped.",
+        "properties": {
+          "assignee_session": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Session"
+          },
+          "deps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Deps",
+            "type": "array"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "enum": [
+                  "haiku",
+                  "sonnet",
+                  "opus",
+                  "fable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "refs": {
+            "items": {
+              "$ref": "#/components/schemas/Ref"
+            },
+            "title": "Refs",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "idea",
+              "open",
+              "in_progress",
+              "done",
+              "dropped"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "step": {
+            "title": "Step",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "todo_done": {
+            "title": "Todo Done",
+            "type": "integer"
+          },
+          "todo_total": {
+            "title": "Todo Total",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "step",
+          "title",
+          "status",
+          "assignee_session",
+          "model",
+          "refs",
+          "version",
+          "ready",
+          "todo_total",
+          "todo_done",
+          "deps"
+        ],
+        "title": "Step",
+        "type": "object"
+      },
+      "StepIn": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "default": "",
+            "title": "Body",
+            "type": "string"
+          },
+          "depends_on": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labels"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "enum": [
+                  "haiku",
+                  "sonnet",
+                  "opus",
+                  "fable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "n": {
+            "minimum": 1.0,
+            "title": "N",
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "todo": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Todo"
+          }
+        },
+        "required": [
+          "n",
+          "title"
+        ],
+        "title": "StepIn",
+        "type": "object"
+      },
+      "StepInsert": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "body": {
+            "default": "",
+            "title": "Body",
+            "type": "string"
+          },
+          "depends_on": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "enum": [
+                  "haiku",
+                  "sonnet",
+                  "opus",
+                  "fable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "steps_version": {
+            "minimum": 0.0,
+            "title": "Steps Version",
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "steps_version",
+          "title"
+        ],
+        "title": "StepInsert",
+        "type": "object"
+      },
+      "StepKeys": {
+        "additionalProperties": false,
+        "properties": {
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "StepKeys",
+        "type": "object"
+      },
+      "StepList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Step"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "steps_version": {
+            "title": "Steps Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "steps_version"
+        ],
+        "title": "StepList",
+        "type": "object"
+      },
+      "StepsOrder": {
+        "additionalProperties": false,
+        "properties": {
+          "order": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Order",
+            "type": "array"
+          },
+          "steps_version": {
+            "minimum": 0.0,
+            "title": "Steps Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "steps_version",
+          "order"
+        ],
+        "title": "StepsOrder",
+        "type": "object"
+      },
+      "StepsPut": {
+        "additionalProperties": false,
+        "properties": {
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/StepIn"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "steps_version": {
+            "minimum": 0.0,
+            "title": "Steps Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "steps_version",
+          "steps"
+        ],
+        "title": "StepsPut",
+        "type": "object"
+      },
+      "StepsVersion": {
+        "additionalProperties": false,
+        "properties": {
+          "steps_version": {
+            "title": "Steps Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "steps_version"
+        ],
+        "title": "StepsVersion",
+        "type": "object"
+      },
       "SuggestionAccept": {
         "additionalProperties": false,
         "properties": {
@@ -1657,6 +2319,23 @@
             ],
             "title": "Labels"
           },
+          "model": {
+            "anyOf": [
+              {
+                "enum": [
+                  "haiku",
+                  "sonnet",
+                  "opus",
+                  "fable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
           "project": {
             "anyOf": [
               {
@@ -1668,6 +2347,21 @@
               }
             ],
             "title": "Project"
+          },
+          "refs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Ref"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refs"
           },
           "spec": {
             "anyOf": [
@@ -2066,7 +2760,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, no_suggestion)"
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
           }
         },
         "summary": "List Specs"
@@ -2112,7 +2806,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
           },
           "413": {
             "content": {
@@ -2298,7 +2992,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
           },
           "412": {
             "content": {
@@ -2308,7 +3002,7 @@
                 }
               }
             },
-            "description": "changed since it was read (stale_version, with current_version on a document)"
+            "description": "changed since it was read (stale_version, with current_version on a document or the plan, current_steps_version on the steps)"
           },
           "422": {
             "content": {
@@ -2419,7 +3113,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, no_suggestion)"
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
           }
         },
         "summary": "List Comments"
@@ -2496,7 +3190,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, no_suggestion)"
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
           }
         },
         "summary": "Add Comment"
@@ -2575,7 +3269,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
           },
           "412": {
             "content": {
@@ -2585,7 +3279,7 @@
                 }
               }
             },
-            "description": "changed since it was read (stale_version, with current_version on a document)"
+            "description": "changed since it was read (stale_version, with current_version on a document or the plan, current_steps_version on the steps)"
           },
           "422": {
             "content": {
@@ -2595,7 +3289,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, no_suggestion)"
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
           }
         },
         "summary": "Accept Suggestion"
@@ -2663,7 +3357,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
           },
           "422": {
             "content": {
@@ -2673,7 +3367,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, no_suggestion)"
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
           }
         },
         "summary": "Dismiss Suggestion"
@@ -2741,7 +3435,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
           },
           "422": {
             "content": {
@@ -2751,7 +3445,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, no_suggestion)"
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
           }
         },
         "summary": "Resolve Comment"
@@ -2894,7 +3588,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, no_suggestion)"
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
           }
         },
         "summary": "Get Document"
@@ -2970,7 +3664,7 @@
                 }
               }
             },
-            "description": "changed since it was read (stale_version, with current_version on a document)"
+            "description": "changed since it was read (stale_version, with current_version on a document or the plan, current_steps_version on the steps)"
           },
           "413": {
             "content": {
@@ -2990,10 +3684,107 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, no_suggestion)"
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
           }
         },
         "summary": "Put Document"
+      }
+    },
+    "/taskboard/api/v1/specs/{key}/docs/{path}/section": {
+      "get": {
+        "description": "One section of a document: the heading whose web anchor slug is `heading` (the\nsecond of two equal headings is `<slug>-2`) and its text up to the next heading of the\nsame or a higher level, under 40000 characters (longer text is cut at a line boundary\nand `truncated` is true).",
+        "operationId": "get_section_taskboard_api_v1_specs__key__docs__path__section_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "heading",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Heading",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Section"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
+          }
+        },
+        "summary": "Get Section"
       }
     },
     "/taskboard/api/v1/specs/{key}/docs/{path}/versions": {
@@ -3087,10 +3878,572 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, no_suggestion)"
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
           }
         },
         "summary": "List Versions"
+      }
+    },
+    "/taskboard/api/v1/specs/{key}/gate": {
+      "get": {
+        "operationId": "get_gate_taskboard_api_v1_specs__key__gate_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Gate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          }
+        },
+        "summary": "Get Gate"
+      }
+    },
+    "/taskboard/api/v1/specs/{key}/plan": {
+      "get": {
+        "operationId": "get_plan_taskboard_api_v1_specs__key__plan_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          }
+        },
+        "summary": "Get Plan"
+      },
+      "put": {
+        "operationId": "put_plan_taskboard_api_v1_specs__key__plan_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanPut"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "changed since it was read (stale_version, with current_version on a document or the plan, current_steps_version on the steps)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
+          }
+        },
+        "summary": "Put Plan"
+      }
+    },
+    "/taskboard/api/v1/specs/{key}/steps": {
+      "get": {
+        "operationId": "list_steps_taskboard_api_v1_specs__key__steps_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StepList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          }
+        },
+        "summary": "List Steps"
+      },
+      "post": {
+        "description": "Insert one step after step `after` (0: first, absent: last).",
+        "operationId": "insert_step_taskboard_api_v1_specs__key__steps_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepInsert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Step"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "changed since it was read (stale_version, with current_version on a document or the plan, current_steps_version on the steps)"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "over a size cap (payload_too_large)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
+          }
+        },
+        "summary": "Insert Step"
+      },
+      "put": {
+        "description": "Replace the step set, keyed by `n` (dense from 1).",
+        "operationId": "set_steps_taskboard_api_v1_specs__key__steps_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepsPut"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StepKeys"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "changed since it was read (stale_version, with current_version on a document or the plan, current_steps_version on the steps)"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "over a size cap (payload_too_large)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
+          }
+        },
+        "summary": "Set Steps"
+      }
+    },
+    "/taskboard/api/v1/specs/{key}/steps/next": {
+      "post": {
+        "description": "The first ready step in order; with `claim` the caller takes it (`in_progress`).",
+        "operationId": "next_step_taskboard_api_v1_specs__key__steps_next_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NextStep"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Step"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "204": {
+            "description": "No step is ready"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
+          }
+        },
+        "summary": "Next Step"
+      }
+    },
+    "/taskboard/api/v1/specs/{key}/steps/order": {
+      "put": {
+        "operationId": "reorder_taskboard_api_v1_specs__key__steps_order_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepsOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StepsVersion"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "changed since it was read (stale_version, with current_version on a document or the plan, current_steps_version on the steps)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
+          }
+        },
+        "summary": "Reorder"
       }
     },
     "/taskboard/api/v1/stream": {
@@ -3624,6 +4977,16 @@
             },
             "description": "the task changed since it was read (stale_version)"
           },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "over a size cap (payload_too_large)"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3968,6 +5331,78 @@
           }
         },
         "summary": "Withdraw"
+      }
+    },
+    "/taskboard/api/v1/tasks/{key}/deps": {
+      "put": {
+        "description": "Set one plan step's dependencies (task keys of steps of the same spec).",
+        "operationId": "set_deps_taskboard_api_v1_tasks__key__deps_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepsPut"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Set Deps Taskboard Api V1 Tasks  Key  Deps Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "source address is not allowed (forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such task, decision or todo item (not_found)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, dependency_cycle)"
+          }
+        },
+        "summary": "Set Deps"
       }
     },
     "/taskboard/api/v1/tasks/{key}/todo": {

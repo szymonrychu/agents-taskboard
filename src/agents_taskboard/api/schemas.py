@@ -24,6 +24,8 @@ ListStatus = Literal["active", "done", "dropped", "all"]
 Title = Field(min_length=1, max_length=200)
 ProjectSlug = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,39}$")
 SpecKey = Field(default=None, pattern=r"^S-[1-9][0-9]{0,17}$")
+Model = Literal["haiku", "sonnet", "opus", "fable"]
+RefKind = Literal["pr", "commit", "branch", "tag", "url"]
 
 
 class _Strict(BaseModel):
@@ -56,6 +58,15 @@ class TaskCreate(_Labelled):
     spec: str | None = SpecKey
 
 
+class Ref(BaseModel):
+    """What implements a plan step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: RefKind
+    value: str = Field(min_length=1, max_length=2000)
+
+
 class TaskPatch(_Labelled):
     version: int
     title: str | None = Field(default=None, min_length=1, max_length=200)
@@ -66,6 +77,12 @@ class TaskPatch(_Labelled):
     assignee_self: bool = False
     project: str | None = ProjectSlug
     spec: str | None = SpecKey
+    refs: list[Ref] | None = Field(default=None, max_length=20)
+    model: Model | None = None
+
+
+class DepsPut(_Strict):
+    depends_on: list[str] = Field(max_length=200)
 
 
 class CommentCreate(_Strict):
@@ -317,3 +334,117 @@ class CommentList(_Strict):
 class SuggestionAccepted(_Strict):
     version: DocumentVersion
     comment: SpecComment
+
+
+# Plan header and steps (base design 3.17). Caps are checked by `db/steps.py` (422).
+
+
+class PlanPut(_Strict):
+    version: int = Field(ge=0)
+    goal: str = ""
+    architecture: str = ""
+    tech_stack: str = ""
+    constraints: list[str] = []
+    review_focus: list[str] = []
+
+
+class Plan(_Strict):
+    """The plan header; version 0 and empty fields before the first write."""
+
+    goal: str
+    architecture: str
+    tech_stack: str
+    constraints: list[str]
+    review_focus: list[str]
+    version: int
+    updated_at: Timestamp | None
+    updated_by: ActorRef | None
+
+
+class StepIn(_Labelled):
+    n: int = Field(ge=1)
+    title: str = Title
+    body: str = ""
+    depends_on: list[int] = []
+    model: Model | None = None
+    labels: list[str] | None = None
+    todo: list[str] | None = None
+
+
+class StepsPut(_Strict):
+    steps_version: int = Field(ge=0)
+    steps: list[StepIn]
+
+
+class StepInsert(_Strict):
+    steps_version: int = Field(ge=0)
+    after: int | None = Field(default=None, ge=0)
+    title: str = Title
+    body: str = ""
+    depends_on: list[int] = []
+    model: Model | None = None
+
+
+class StepsOrder(_Strict):
+    steps_version: int = Field(ge=0)
+    order: list[str]
+
+
+class NextStep(_Strict):
+    claim: bool = False
+
+
+class Step(_Strict):
+    """A step as listed: no body; `deps` are task keys, `ready` when open and every dependency
+    is done or dropped."""
+
+    key: str
+    step: int
+    title: str
+    status: Status
+    assignee_session: str | None
+    model: Model | None
+    refs: list[Ref]
+    version: int
+    ready: bool
+    todo_total: int
+    todo_done: int
+    deps: list[str]
+
+
+class StepList(_Strict):
+    items: list[Step]
+    steps_version: int
+
+
+class StepKeys(_Strict):
+    keys: list[str]
+
+
+class StepsVersion(_Strict):
+    steps_version: int
+
+
+class GateDecision(_Strict):
+    id: int
+    question: str
+    status: Literal["open", "answered"]
+    answer: Any
+
+
+class Gate(_Strict):
+    key: str
+    status: SpecStatus
+    approved_versions: dict[str, int] | None
+    gate_task: str | None
+    decisions: list[GateDecision]
+    gate: Literal["none", "waiting", "open"]
+    approved: bool
+
+
+class Section(_Strict):
+    path: str
+    version: int
+    heading: str
+    body: str
+    truncated: bool

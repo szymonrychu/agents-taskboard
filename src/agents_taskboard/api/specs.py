@@ -16,6 +16,7 @@ from agents_taskboard.api.schemas import (
     DocumentList,
     DocumentPut,
     DocumentVersion,
+    Section,
     SpecComment,
     SpecCommentCreate,
     SpecCreate,
@@ -30,6 +31,7 @@ from agents_taskboard.api.schemas import (
 from agents_taskboard.api.tasks import MAX_LIMIT, pool_of, public_url, require_target
 from agents_taskboard.db import specs as repo
 from agents_taskboard.labels import normalize_labels
+from agents_taskboard.sections import find_section
 
 MARKDOWN = "text/markdown"
 VERSION_HEADER = "X-Spec-Version"
@@ -223,6 +225,36 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
         if not items and cursor is None:
             raise ApiError(404, "not_found", f"no document {path} in {key}")
         return {"items": items, "next_cursor": next_cursor}
+
+    @router.get("/specs/{key}/docs/{path:path}/section", response_model=Section)
+    async def get_section(
+        key: str,
+        path: str,
+        request: Request,
+        actor: ActorDep,
+        heading: Annotated[str, Query(min_length=1, max_length=200)],
+        version: Annotated[int | None, Query(ge=1)] = None,
+    ) -> dict[str, Any]:
+        """One section of a document: the heading whose web anchor slug is `heading` (the
+        second of two equal headings is `<slug>-2`) and its text up to the next heading of the
+        same or a higher level, under 40000 characters (longer text is cut at a line boundary
+        and `truncated` is true)."""
+        spec = await load_spec(request, actor, key)
+        async with pool_of(request).connection() as conn:
+            doc = await repo.get_document(conn, spec_id_of(spec["key"]), path, version)
+        if doc is None:
+            raise ApiError(404, "not_found", f"no document {path} in spec {key}")
+        found = find_section(doc["body"], heading)
+        if found is None:
+            raise ApiError(404, "not_found", f"no section {heading} in {path}")
+        text, truncated = found
+        return {
+            "path": path,
+            "version": doc["version"],
+            "heading": heading,
+            "body": text,
+            "truncated": truncated,
+        }
 
     @router.get(
         "/specs/{key}/docs/{path:path}",
