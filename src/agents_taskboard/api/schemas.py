@@ -172,3 +172,17 @@ class DocumentPut(_Strict):
     note: str | None = Note
     sources: list[dict[str, Any]] = Sources
     client_key: str | None = ClientKey
+
+
+class SpecCommentCreate(_Strict):
+    path: str | None = Field(default=None, min_length=1, max_length=200)
+    version: int | None = Field(default=None, ge=1)
+    anchor: str | None = Field(default=None, min_length=1, max_length=200)
+    body: str = Field(min_length=1)
+    suggestion: str | None = None
+    attachments: list[dict[str, Any]] = Field(default=[], max_length=10)
+    client_key: str | None = ClientKey
+
+
+class SuggestionAccept(_Strict):
+    version: int = Field(ge=0)

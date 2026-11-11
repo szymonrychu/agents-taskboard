@@ -52,8 +52,9 @@ PROJECT_422 = "invalid request (invalid_request, unknown_project, project_archiv
 SPEC_ERRORS = {
     403: "forbidden (forbidden, user_only)",
     404: "no such spec, document or comment (not_found)",
-    409: "conflict (name_taken)",
+    409: "conflict (name_taken, already_resolved, already_decided)",
     412: "changed since it was read (stale_version, with current_version on a document)",
+    422: "invalid request (invalid_request, no_suggestion)",
 }
 
 ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
@@ -78,6 +79,11 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/specs/{key}/docs/{path}"): (403, 404, 422),
     ("put", "/specs/{key}/docs/{path}"): (403, 404, 412, 413, 422),
     ("get", "/specs/{key}/docs/{path}/versions"): (403, 404, 422),
+    ("get", "/specs/{key}/comments"): (403, 404, 422),
+    ("post", "/specs/{key}/comments"): (403, 404, 413, 422),
+    ("post", "/specs/{key}/comments/{comment_id}/resolve"): (403, 404, 409, 422),
+    ("post", "/specs/{key}/comments/{comment_id}/accept"): (403, 404, 409, 412, 422),
+    ("post", "/specs/{key}/comments/{comment_id}/dismiss"): (403, 404, 409, 422),
 }
 
 PROJECT_ROUTES = {

@@ -139,13 +139,33 @@ Write the next version: `body` (string, or `null` to remove the document), `base
 
 One document's history, newest first, without bodies (`removed` marks a removal). Query: `limit`, `cursor`. Returns `{"items": [...], "next_cursor": <version>|null}`.
 
+### `GET /taskboard/api/v1/specs/{key}/comments`
+
+Comments of a spec, oldest first: `{"items": [...]}`. Query: `path` (one document), `open` (`true`: unresolved only, `false`: resolved only).
+
+### `POST /taskboard/api/v1/specs/{key}/comments`
+
+Comment on a spec: `body` (up to 16 KiB), optional `path`, `version` and `anchor` (a heading slug or `L<a>-L<b>`), `suggestion` (a proposed replacement of the whole document, up to 192 KiB; needs `path`; sets `suggestion_status` to `open`), `attachments` (opaque refs, at most 10), `client_key`. `201`; a repeated `client_key` of the same creator answers `200` with the stored comment. `413 payload_too_large` over a cap.
+
+### `POST /taskboard/api/v1/specs/{key}/comments/{comment_id}/resolve`
+
+Resolve a comment. `409 already_resolved` when it already is.
+
+### `POST /taskboard/api/v1/specs/{key}/comments/{comment_id}/accept`
+
+Accept a suggestion as the user (web and delegate listeners; the relay has no such route): `version` is the document's current version as the client last saw it. Writes the whole `suggestion` as the next version of the comment's document (note `Accepted proposed edit from comment <id>`, `sources` copied from the attachments), marks the suggestion `accepted` with `accepted_version` and resolves the comment, in one transaction and one event. `201` with `{"version", "comment"}`. `412 stale_version` with `current_version` when the document moved on (nothing changes), `409 already_decided`, `422 no_suggestion`.
+
+### `POST /taskboard/api/v1/specs/{key}/comments/{comment_id}/dismiss`
+
+Dismiss a suggestion as the user (web and delegate listeners): marks it `dismissed` and resolves the comment. `409 already_decided`, `422 no_suggestion`.
+
 ### `GET /taskboard/api/v1/stream`
 
 Server-sent events (web listener only): `task_changed` with data `{"key": "T-5", "project": "default"}` whenever a task changes; the optional `project` query parameter delivers only that project's changes. A notification is a hint; the stream also polls every 5 seconds, and a client refetches the task.
 
 ### Errors
 
-Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open` and `name_taken` (409), `stale_version` (412, on a document with `current_version`), `payload_too_large` (413), `invalid_request`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
+Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open`, `name_taken`, `already_resolved` and `already_decided` (409), `stale_version` (412, on a document with `current_version`), `payload_too_large` (413), `invalid_request`, `no_suggestion`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
 
 ## Notices
 

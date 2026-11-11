@@ -10,7 +10,14 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.api.errors import ApiError
-from agents_taskboard.api.schemas import DocumentPut, SpecCreate, SpecPatch, SpecStatus
+from agents_taskboard.api.schemas import (
+    DocumentPut,
+    SpecCommentCreate,
+    SpecCreate,
+    SpecPatch,
+    SpecStatus,
+    SuggestionAccept,
+)
 from agents_taskboard.api.tasks import MAX_LIMIT, pool_of, public_url, require_target
 from agents_taskboard.db import specs as repo
 from agents_taskboard.labels import normalize_labels
@@ -52,6 +59,12 @@ def repo_errors(key: str) -> Iterator[None]:
         raise ApiError(422, "invalid_request", str(exc)) from None
     except repo.UserOnly as exc:
         raise ApiError(403, "user_only", str(exc)) from None
+    except repo.AlreadyResolved:
+        raise ApiError(409, "already_resolved", "the comment is already resolved") from None
+    except repo.AlreadyDecided:
+        raise ApiError(409, "already_decided", "the suggestion is already decided") from None
+    except repo.NoSuggestion:
+        raise ApiError(422, "no_suggestion", "the comment has no suggestion") from None
 
 
 async def load_spec(request: Request, actor: Actor, key: str) -> dict[str, Any]:
@@ -255,5 +268,82 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
         if not created:
             response.status_code = 200
         return version
+
+    @router.get("/specs/{key}/comments")
+    async def list_comments(
+        key: str,
+        request: Request,
+        actor: ActorDep,
+        path: str | None = None,
+        open: bool | None = None,  # noqa: A002 - the documented query parameter
+    ) -> dict[str, Any]:
+        spec = await load_spec(request, actor, key)
+        async with pool_of(request).connection() as conn:
+            items = await repo.list_comments(conn, spec_id_of(spec["key"]), path, open)
+        return {"items": items}
+
+    @router.post("/specs/{key}/comments", status_code=201)
+    async def add_comment(
+        key: str,
+        body: SpecCommentCreate,
+        request: Request,
+        response: Response,
+        actor: ActorDep,
+    ) -> dict[str, Any]:
+        spec_id = spec_id_of(key)
+        with repo_errors(key):
+            async with pool_of(request).connection() as conn:
+                comment, created = await repo.add_comment(
+                    conn,
+                    actor,
+                    spec_id,
+                    path=body.path,
+                    version=body.version,
+                    anchor=body.anchor,
+                    body=body.body,
+                    suggestion=body.suggestion,
+                    attachments=body.attachments,
+                    client_key=body.client_key,
+                )
+        if not created:
+            response.status_code = 200
+        return comment
+
+    @router.post("/specs/{key}/comments/{comment_id}/resolve")
+    async def resolve_comment(
+        key: str, comment_id: int, request: Request, actor: ActorDep
+    ) -> dict[str, Any]:
+        spec_id = spec_id_of(key)
+        with repo_errors(key):
+            async with pool_of(request).connection() as conn:
+                return await repo.resolve_comment(conn, actor, spec_id, comment_id)
+
+    if user_routes:
+
+        @router.post("/specs/{key}/comments/{comment_id}/accept", status_code=201)
+        async def accept_suggestion(
+            key: str, comment_id: int, body: SuggestionAccept, request: Request, actor: ActorDep
+        ) -> dict[str, Any]:
+            """Write the suggestion as the next version of the comment's document."""
+            if actor.kind != "user":
+                raise ApiError(403, "user_only", "only the user accepts a suggestion")
+            spec_id = spec_id_of(key)
+            with repo_errors(key):
+                async with pool_of(request).connection() as conn:
+                    version, comment = await repo.accept_suggestion(
+                        conn, actor, spec_id, comment_id, body.version
+                    )
+            return {"version": version, "comment": comment}
+
+        @router.post("/specs/{key}/comments/{comment_id}/dismiss")
+        async def dismiss_suggestion(
+            key: str, comment_id: int, request: Request, actor: ActorDep
+        ) -> dict[str, Any]:
+            if actor.kind != "user":
+                raise ApiError(403, "user_only", "only the user dismisses a suggestion")
+            spec_id = spec_id_of(key)
+            with repo_errors(key):
+                async with pool_of(request).connection() as conn:
+                    return await repo.dismiss_suggestion(conn, actor, spec_id, comment_id)
 
     return router

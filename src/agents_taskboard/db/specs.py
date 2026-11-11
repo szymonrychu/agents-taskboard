@@ -606,3 +606,262 @@ async def patch_spec(
         await append_spec_event(conn, spec_id, actor, "spec_updated", detail)
         await notify_spec_changed(conn, spec_id)
         return True
+
+
+COMMENT_CAP = 16 * 1024
+MAX_ATTACHMENTS = 10
+
+
+class AlreadyResolved(Exception):
+    pass
+
+
+class AlreadyDecided(Exception):
+    pass
+
+
+class NoSuggestion(Exception):
+    pass
+
+
+_COMMENT_COLUMNS = (
+    "c.id, c.path, c.version, c.anchor, c.body, c.suggestion, c.suggestion_status,"
+    " c.accepted_version, c.decided_at, c.decided_by_kind, c.decided_by_session,"
+    " c.decided_by_slug, c.attachments, c.resolved_at, c.resolved_by_kind,"
+    " c.resolved_by_session, c.resolved_by_slug, c.created_by_kind, c.created_by_session,"
+    " c.created_by_slug, c.created_at"
+)
+
+
+def comment_json(row: dict[str, Any]) -> dict[str, Any]:
+    row = dict(row)
+    by = {p: _by(p, row) for p in ("decided_by", "resolved_by", "created_by")}
+    return {**row, **by}
+
+
+async def _comment(
+    conn: psycopg.AsyncConnection, spec_id: int, comment_id: int, lock: bool = False
+) -> dict[str, Any] | None:
+    cur = await conn.cursor(row_factory=dict_row).execute(
+        f"SELECT {_COMMENT_COLUMNS} FROM spec_comments c WHERE c.id = %s AND c.spec_id = %s"
+        + (" FOR UPDATE" if lock else ""),
+        (comment_id, spec_id),
+    )
+    return await cur.fetchone()
+
+
+async def _replayed_comment(
+    conn: psycopg.AsyncConnection, actor: Actor, spec_id: int, client_key: str
+) -> int | None:
+    if actor.session_id is None:
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext('spec-comment:' || %s || ':' || %s))",
+            (spec_id, client_key),
+        )
+        cur = await conn.execute(
+            "SELECT id FROM spec_comments WHERE spec_id = %s AND created_by_session IS NULL"
+            " AND client_key = %s",
+            (spec_id, client_key),
+        )
+    else:
+        cur = await conn.execute(
+            "SELECT id FROM spec_comments WHERE spec_id = %s AND created_by_session = %s"
+            " AND client_key = %s",
+            (spec_id, actor.session_id, client_key),
+        )
+    row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def add_comment(
+    conn: psycopg.AsyncConnection,
+    actor: Actor,
+    spec_id: int,
+    *,
+    path: str | None,
+    version: int | None,
+    anchor: str | None,
+    body: str,
+    suggestion: str | None,
+    attachments: list,
+    client_key: str | None,
+) -> tuple[dict[str, Any], bool]:
+    """Comment on a spec (optionally a document version and anchor, with a proposed
+    replacement); returns (comment, created). A replayed (spec, creator, client_key) returns the
+    stored comment. Raises NotFound, TooLarge, InvalidPath, InvalidRequest."""
+    if path is not None:
+        check_path(path)
+    if suggestion is not None and path is None:
+        raise InvalidRequest("a suggestion needs the document path")
+    if len(attachments) > MAX_ATTACHMENTS:
+        raise InvalidRequest(f"more than {MAX_ATTACHMENTS} attachments")
+    check_body(body, COMMENT_CAP)
+    check_body(suggestion)
+    async with conn.transaction():
+        await _lock_spec(conn, actor, spec_id)
+        if client_key is not None:
+            existing = await _replayed_comment(conn, actor, spec_id, client_key)
+            if existing is not None:
+                stored = await _comment(conn, spec_id, existing)
+                assert stored is not None
+                return comment_json(stored), False
+        cur = await conn.execute(
+            "INSERT INTO spec_comments (spec_id, path, version, anchor, body, suggestion,"
+            " suggestion_status, attachments, created_by_kind, created_by_session,"
+            " created_by_slug, client_key)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (
+                spec_id,
+                path,
+                version,
+                anchor,
+                body,
+                suggestion,
+                None if suggestion is None else "open",
+                Jsonb(attachments),
+                actor.kind,
+                actor.session_id,
+                actor.slug,
+                client_key,
+            ),
+        )
+        comment_id = (await cur.fetchone())[0]
+        await append_spec_event(conn, spec_id, actor, "comment_added", {"comment_id": comment_id})
+        await notify_spec_changed(conn, spec_id)
+        stored = await _comment(conn, spec_id, comment_id)
+        assert stored is not None
+        return comment_json(stored), True
+
+
+async def list_comments(
+    conn: psycopg.AsyncConnection, spec_id: int, path: str | None, open_only: bool | None
+) -> list[dict[str, Any]]:
+    """Comments of a visible spec, oldest first; `open_only` True keeps unresolved ones, False
+    resolved ones, None all."""
+    where = "c.spec_id = %s"
+    params: list[Any] = [spec_id]
+    if path is not None:
+        where += " AND c.path = %s"
+        params.append(path)
+    if open_only is not None:
+        where += " AND c.resolved_at IS NULL" if open_only else " AND c.resolved_at IS NOT NULL"
+    cur = await conn.cursor(row_factory=dict_row).execute(
+        f"SELECT {_COMMENT_COLUMNS} FROM spec_comments c WHERE {where} ORDER BY c.id", params
+    )
+    return [comment_json(r) for r in await cur.fetchall()]
+
+
+async def resolve_comment(
+    conn: psycopg.AsyncConnection, actor: Actor, spec_id: int, comment_id: int
+) -> dict[str, Any]:
+    """Resolve an open comment (status-guarded). Raises NotFound, AlreadyResolved."""
+    async with conn.transaction():
+        await _lock_spec(conn, actor, spec_id)
+        cur = await conn.execute(
+            "UPDATE spec_comments SET resolved_at = now(), resolved_by_kind = %s,"
+            " resolved_by_session = %s, resolved_by_slug = %s"
+            " WHERE id = %s AND spec_id = %s AND resolved_at IS NULL RETURNING id",
+            (actor.kind, actor.session_id, actor.slug, comment_id, spec_id),
+        )
+        if await cur.fetchone() is None:
+            if await _comment(conn, spec_id, comment_id) is None:
+                raise NotFound
+            raise AlreadyResolved
+        await append_spec_event(
+            conn, spec_id, actor, "comment_resolved", {"comment_id": comment_id}
+        )
+        await notify_spec_changed(conn, spec_id)
+        stored = await _comment(conn, spec_id, comment_id)
+        assert stored is not None
+        return comment_json(stored)
+
+
+async def _open_suggestion(
+    conn: psycopg.AsyncConnection, spec_id: int, comment_id: int
+) -> dict[str, Any]:
+    stored = await _comment(conn, spec_id, comment_id, lock=True)
+    if stored is None:
+        raise NotFound
+    if stored["suggestion_status"] is None:
+        raise NoSuggestion
+    if stored["suggestion_status"] != "open":
+        raise AlreadyDecided
+    return stored
+
+
+async def _decide(
+    conn: psycopg.AsyncConnection,
+    actor: Actor,
+    comment_id: int,
+    status: str,
+    accepted_version: int | None,
+) -> None:
+    cur = await conn.execute(
+        "UPDATE spec_comments SET suggestion_status = %s, accepted_version = %s,"
+        " decided_at = now(), decided_by_kind = %s, decided_by_session = %s,"
+        " decided_by_slug = %s, resolved_at = coalesce(resolved_at, now()),"
+        " resolved_by_kind = CASE WHEN resolved_at IS NULL THEN %s ELSE resolved_by_kind END,"
+        " resolved_by_session = CASE WHEN resolved_at IS NULL THEN %s"
+        "   ELSE resolved_by_session END,"
+        " resolved_by_slug = CASE WHEN resolved_at IS NULL THEN %s ELSE resolved_by_slug END"
+        " WHERE id = %s AND suggestion_status = 'open' RETURNING id",
+        (
+            status,
+            accepted_version,
+            actor.kind,
+            actor.session_id,
+            actor.slug,
+            actor.kind,
+            actor.session_id,
+            actor.slug,
+            comment_id,
+        ),
+    )
+    if await cur.fetchone() is None:
+        raise AlreadyDecided
+
+
+async def accept_suggestion(
+    conn: psycopg.AsyncConnection, actor: Actor, spec_id: int, comment_id: int, version: int
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Write the comment's whole suggestion as the next version of its document, based on
+    `version`, and mark the suggestion accepted and the comment resolved; one transaction, one
+    event. Returns (version, comment). Raises NotFound, NoSuggestion, AlreadyDecided,
+    StaleVersion (nothing changes)."""
+    async with conn.transaction():
+        spec = await _lock_spec(conn, actor, spec_id)
+        stored = await _open_suggestion(conn, spec_id, comment_id)
+        written, _ = await write_version_locked(
+            conn,
+            actor,
+            spec,
+            stored["path"],
+            body=stored["suggestion"],
+            base_version=version,
+            note=f"Accepted proposed edit from comment {comment_id}",
+            sources=stored["attachments"][:MAX_SOURCES],
+            client_key=None,
+            event=("suggestion_accepted", {"comment_id": comment_id}),
+        )
+        await _decide(conn, actor, comment_id, "accepted", written["version"])
+        decided = await _comment(conn, spec_id, comment_id)
+        assert decided is not None
+        return written, comment_json(decided)
+
+
+async def dismiss_suggestion(
+    conn: psycopg.AsyncConnection, actor: Actor, spec_id: int, comment_id: int
+) -> dict[str, Any]:
+    """Mark the suggestion dismissed and the comment resolved. Raises NotFound, NoSuggestion,
+    AlreadyDecided."""
+    async with conn.transaction():
+        await _lock_spec(conn, actor, spec_id)
+        await _open_suggestion(conn, spec_id, comment_id)
+        await _decide(conn, actor, comment_id, "dismissed", None)
+        await append_spec_event(
+            conn, spec_id, actor, "suggestion_dismissed", {"comment_id": comment_id}
+        )
+        await notify_spec_changed(conn, spec_id)
+        decided = await _comment(conn, spec_id, comment_id)
+        assert decided is not None
+        return comment_json(decided)

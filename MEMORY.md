@@ -2,6 +2,12 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-11 - spec comments, accept and dismiss (T-116 A3)
+
+- Accept is one transaction under the spec row lock: lock the comment, check it has an open suggestion (422 `no_suggestion`, 409 `already_decided`), write the version through `write_version_locked` (a moved document raises `StaleVersion` and the whole transaction rolls back, so the comment stays `open`), then the status-guarded `UPDATE ... WHERE suggestion_status = 'open'`. It logs one event, `suggestion_accepted {path, version, comment_id}`, not a `document_put` plus a second one. The response is `{"version", "comment"}`.
+- Accept and dismiss also resolve the comment (resolver = the deciding user, unless it was already resolved). A suggestion needs `path` (422 otherwise): accept writes the whole suggestion to that document. Comment replay is per (spec, creating session, client_key); users serialise per key with an advisory lock like task creates.
+- Accept and dismiss exist only on user listeners, so the relay answers the plain 404 (no other method shares those paths, so no hidden handler is needed as for DELETE).
+
 ## 2026-11-11 - spec and document routes (T-116 A2)
 
 - One router (`api/specs.build_spec_router(actor_dep, user_routes=...)`) on all three listeners. User-only routes exist only with `user_routes=True`; the relay gets a hidden (`include_in_schema=False`) `DELETE /specs/{key}` that answers the plain route 404, because without it Starlette answers 405 for a path that exists with other methods, and the design wants the relay to look like it has no such route.
