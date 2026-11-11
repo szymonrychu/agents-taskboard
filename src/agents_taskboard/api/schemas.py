@@ -1,10 +1,19 @@
-"""Request bodies of the tasks API."""
+"""Request bodies of the tasks API and response models of the spec routes."""
 
 from __future__ import annotations
 
-from typing import Any, Literal, Self
+from datetime import datetime
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    WithJsonSchema,
+    field_validator,
+    model_validator,
+)
 
 from agents_taskboard.labels import normalize_labels
 
@@ -189,3 +198,122 @@ class SpecCommentCreate(_Strict):
 
 class SuggestionAccept(_Strict):
     version: int = Field(ge=0)
+
+
+# Response models of the spec routes. They mirror `db/specs.py` exactly (no field is added,
+# renamed or dropped) and forbid extras, so a drifting route fails loudly instead of
+# silently widening the contract.
+Timestamp = Annotated[
+    datetime,
+    PlainSerializer(lambda value: value.isoformat(), return_type=str, when_used="json"),
+    WithJsonSchema({"type": "string", "format": "date-time"}),
+]
+SuggestionStatus = Literal["open", "accepted", "dismissed"]
+
+
+class ActorRef(_Strict):
+    kind: str
+    session: str | None
+    slug: str | None
+
+
+class DocumentVersion(_Strict):
+    """One stored version of a document, without its body. A removal has no hash or size."""
+
+    path: str
+    version: int
+    sha256: str | None
+    size: int | None
+    note: str | None
+    sources: list[dict[str, Any]]
+    created_by: ActorRef | None
+    created_at: Timestamp
+    # `version_json` also leaks the raw columns behind `created_by`; kept so the contract is
+    # exactly what the routes return.
+    created_by_kind: str | None
+    created_by_session: str | None
+    created_by_slug: str | None
+
+
+class DocumentVersionListed(DocumentVersion):
+    """A version in a history listing; `removed` is true for a removal."""
+
+    removed: bool
+
+
+class DocumentBody(DocumentVersion):
+    body: str
+
+
+class DocumentList(_Strict):
+    items: list[DocumentVersion]
+
+
+class VersionPage(_Strict):
+    items: list[DocumentVersionListed]
+    next_cursor: int | None
+
+
+class SpecDocument(_Strict):
+    """A live document inside a single spec."""
+
+    path: str
+    version: int
+    size: int | None
+    sha256: str | None
+    created_by: ActorRef | None
+    updated_at: Timestamp
+
+
+class SpecSummary(_Strict):
+    key: str
+    project: str
+    name: str
+    title: str
+    status: SpecStatus
+    labels: list[str]
+    assignee_session: str | None
+    assignee_slug: str | None
+    created_by: ActorRef | None
+    version: int
+    created_at: Timestamp
+    updated_at: Timestamp
+    url: str
+
+
+class SpecDetail(SpecSummary):
+    documents: list[SpecDocument]
+    tasks: list[str]
+    open_comments: int
+
+
+class SpecPage(_Strict):
+    items: list[SpecSummary]
+    next_cursor: str | None
+
+
+class SpecComment(_Strict):
+    id: int
+    path: str | None
+    version: int | None
+    anchor: str | None
+    body: str
+    suggestion: str | None
+    suggestion_status: SuggestionStatus | None
+    accepted_version: int | None
+    decided_at: Timestamp | None
+    decided_by: ActorRef | None
+    attachments: list[dict[str, Any]]
+    resolved_at: Timestamp | None
+    resolved_by: ActorRef | None
+    created_by: ActorRef | None
+    created_at: Timestamp
+
+
+class CommentList(_Strict):
+    items: list[SpecComment]
+
+
+class SuggestionAccepted(_Strict):
+    version: DocumentVersion
+    comment: SpecComment
