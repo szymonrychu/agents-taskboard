@@ -24,6 +24,8 @@ def mount_probe(client: httpx.AsyncClient, dependency) -> None:
             "session_id": actor.session_id,
             "slug": actor.slug,
             "projects": None if actor.projects is None else sorted(actor.projects),
+            "home": actor.home_project,
+            "default_project": actor.default_project(),
         }
 
 
@@ -39,7 +41,14 @@ async def test_session_header_without_bearer_ignored_on_web(web_client):
     mount_probe(web_client, actor_from_web)
     r = await web_client.get(f"{PREFIX}/_probe", headers=AGENT)
     assert r.status_code == 200
-    assert r.json() == {"kind": "user", "session_id": None, "slug": None, "projects": None}
+    assert r.json() == {
+        "kind": "user",
+        "session_id": None,
+        "slug": None,
+        "projects": None,
+        "home": None,
+        "default_project": "default",
+    }
 
 
 async def test_service_call_missing_session_header_is_400(service_client):
@@ -58,6 +67,8 @@ async def test_service_call_with_relay_bearer_reads_agent_identity(service_clien
         "session_id": AGENT["X-Orch-Session"],
         "slug": "mx-99",
         "projects": ["proj-a"],
+        "home": "proj-a",
+        "default_project": "proj-a",
     }
 
 
@@ -70,13 +81,36 @@ async def test_service_call_star_projects_is_every_project(service_client):
     assert r.json()["projects"] is None
 
 
+async def test_service_call_project_list_first_is_home(service_client):
+    mount_probe(service_client, actor_from_service)
+    r = await service_client.get(
+        f"{PREFIX}/_probe", headers={**AUTH, **AGENT, "X-Orch-Projects": "agents,spellslinger"}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["projects"] == ["agents", "spellslinger"]
+    assert body["home"] == "agents"
+    assert body["default_project"] == "agents"
+    ten = ",".join(f"p{i}" for i in range(10))
+    r = await service_client.get(
+        f"{PREFIX}/_probe", headers={**AUTH, **AGENT, "X-Orch-Projects": ten}
+    )
+    assert r.status_code == 200
+    assert r.json()["home"] == "p0"
+
+
 async def test_service_call_missing_projects_header_is_400(service_client):
     mount_probe(service_client, actor_from_service)
     no_projects = {k: v for k, v in AGENT.items() if k != "X-Orch-Projects"}
     for headers in (
         no_projects,
         {**AGENT, "X-Orch-Projects": ""},
-        {**AGENT, "X-Orch-Projects": "a,b"},
+        {**AGENT, "X-Orch-Projects": "a,,b"},
+        {**AGENT, "X-Orch-Projects": "a,"},
+        {**AGENT, "X-Orch-Projects": "a,a"},
+        {**AGENT, "X-Orch-Projects": "a,*"},
+        {**AGENT, "X-Orch-Projects": "a,B!"},
+        {**AGENT, "X-Orch-Projects": ",".join(f"p{i}" for i in range(11))},
     ):
         r = await service_client.get(f"{PREFIX}/_probe", headers={**AUTH, **headers})
         assert r.status_code == 400

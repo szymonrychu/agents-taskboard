@@ -11,7 +11,7 @@ from test_api_tasks import S1, TASKS, agent
 from agents_taskboard.projects import ProjectLookup
 
 ORCH = "http://orch.test"
-PROJECTS = {"default": False, "a": False, "b": False, "old": True}
+PROJECTS = {"default": False, "a": False, "b": False, "c": False, "old": True}
 UNKNOWN = "T-999999"
 
 
@@ -411,3 +411,68 @@ async def test_task_list_by_spec_never_crosses_projects(service_client):
         r = await service_client.get(TASKS, params={"spec": key}, headers=scope(caller))
         assert r.status_code == 200
         assert len(r.json()["items"]) == expected, caller
+
+
+async def test_multi_project_scope_reads_and_writes_listed_projects_only(service_client):
+    ta = await make_task(service_client, "a")
+    tb = await make_task(service_client, "b")
+    tc = await make_task(service_client, "c")
+    sa = await make_spec(service_client, "a")
+    sc = await make_spec(service_client, "c")
+    caller = scope("a,b")
+    for key in (ta["key"], tb["key"]):
+        assert (await service_client.get(f"{TASKS}/{key}", headers=caller)).status_code == 200
+        r = await service_client.post(
+            f"{TASKS}/{key}/comments", json={"body": "hi"}, headers=caller
+        )
+        assert r.status_code == 201, r.text
+        r = await service_client.put(
+            f"{TASKS}/{key}/todo", json={"items": [{"text": "x"}]}, headers=caller
+        )
+        assert r.status_code == 200, r.text
+    assert (await service_client.get(f"{TASKS}/{tc['key']}", headers=caller)).status_code == 404
+    r = await service_client.post(
+        f"{TASKS}/{tc['key']}/comments", json={"body": "hi"}, headers=caller
+    )
+    assert r.status_code == 404
+    r = await service_client.get(TASKS, headers=caller)
+    assert sorted(t["project"] for t in r.json()["items"]) == ["a", "b"]
+    assert (await service_client.get(f"{SPECS}/{sa['key']}", headers=caller)).status_code == 200
+    assert (await service_client.get(f"{SPECS}/{sc['key']}", headers=caller)).status_code == 404
+    r = await service_client.get(SPECS, headers=caller)
+    assert [s["project"] for s in r.json()["items"]] == ["a"]
+
+
+async def test_multi_project_create_defaults_home_and_moves_within_list(service_client):
+    caller = scope("a,b")
+    r = await service_client.post(TASKS, json={"title": "t"}, headers=caller)
+    assert (r.status_code, r.json()["project"]) == (201, "a")
+    r = await service_client.post(TASKS, json={"title": "t", "project": "b"}, headers=caller)
+    assert (r.status_code, r.json()["project"]) == (201, "b")
+    r = await service_client.post(TASKS, json={"title": "t", "project": "c"}, headers=caller)
+    assert (r.status_code, r.json()["error"]["code"]) == (403, "project_forbidden")
+    task = await make_task(service_client, "a")
+    r = await service_client.patch(
+        f"{TASKS}/{task['key']}", json={"version": 1, "project": "b"}, headers=caller
+    )
+    assert (r.status_code, r.json()["project"]) == (200, "b")
+    r = await service_client.patch(
+        f"{TASKS}/{task['key']}", json={"version": 2, "project": "c"}, headers=caller
+    )
+    assert (r.status_code, r.json()["error"]["code"]) == (403, "project_forbidden")
+    r = await service_client.post(SPECS, json={"name": "s", "title": "t"}, headers=caller)
+    assert (r.status_code, r.json()["project"]) == (201, "a")
+    r = await service_client.post(
+        SPECS, json={"name": "s2", "title": "t", "project": "c"}, headers=caller
+    )
+    assert (r.status_code, r.json()["error"]["code"]) == (403, "project_forbidden")
+
+
+async def test_multi_project_summary_lists_granted_projects(service_client):
+    await make_task(service_client, "a")
+    await make_task(service_client, "b")
+    await make_task(service_client, "c")
+    r = await service_client.get(
+        f"{TASKS.rsplit('/', 1)[0]}/projects/summary", headers=scope("a,b")
+    )
+    assert sorted(p["project"] for p in r.json()) == ["a", "b"]
