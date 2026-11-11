@@ -62,8 +62,8 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
             current = await repo.get_decision(conn, actor, decision_id)
         if current is None or current.task_id != task_id:
             raise ApiError(404, "not_found", f"no decision {decision_id} on {key}")
-        if current.asking_session != actor.session_id:
-            raise ApiError(403, "forbidden", "only the asking session can withdraw")
+        if current.asking_session != actor.session_id and not actor.is_superleader:
+            raise ApiError(403, "forbidden", "only the asking session or a superleader withdraws")
         raise ApiError(409, "not_open", f"decision is already {current.status}")
 
     if answerable:

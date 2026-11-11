@@ -70,7 +70,6 @@ def test_service_routes_are_a_documented_subset():
         f"POST {PREFIX}/tasks/{{key}}/decisions/{{decision_id}}/answer",
         f"GET {PREFIX}/stream",
         f"POST {PREFIX}/specs/{{key}}/comments/{{comment_id}}/accept",
-        f"POST {PREFIX}/specs/{{key}}/comments/{{comment_id}}/dismiss",
     }
     assert f"GET {PREFIX}/projects/summary" in service
 

@@ -2750,7 +2750,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "422": {
             "content": {
@@ -2796,7 +2796,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "409": {
             "content": {
@@ -2868,7 +2868,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -2915,7 +2915,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -2972,7 +2972,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3093,7 +3093,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3160,7 +3160,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3249,7 +3249,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3337,7 +3337,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3415,7 +3415,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3484,7 +3484,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3568,7 +3568,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3644,7 +3644,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3761,7 +3761,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3858,7 +3858,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3917,7 +3917,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -3966,7 +3966,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -4023,7 +4023,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -4092,7 +4092,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -4150,7 +4150,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -4238,7 +4238,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -4341,7 +4341,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {
@@ -4410,7 +4410,7 @@
                 }
               }
             },
-            "description": "forbidden (forbidden, user_only, project_forbidden)"
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
           },
           "404": {
             "content": {

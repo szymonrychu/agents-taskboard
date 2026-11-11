@@ -95,7 +95,7 @@ Ask a decision (agents only, `403 agent_required` for a user): `question`, `cont
 
 ### `POST /taskboard/api/v1/tasks/{key}/decisions/{decision_id}/withdraw`
 
-Withdraw an open decision (the asking session only, `403 forbidden` otherwise). Body required: `reason` (1..2000 characters, not blank) and exactly one of `superseded_by` (id of another existing decision in the caller's project scope, not the decision itself) or `answered_elsewhere` (free text, 1..4000, not blank); anything else is `422`. The decision JSON then carries `withdraw_reason`, `superseded_by`, `superseded_by_task_key` and `answered_elsewhere` (all null while open, answered, or withdrawn before migration 0003). `409 not_open` when it is no longer open.
+Withdraw an open decision (the asking session, or any superleader, i.e. an agent whose `X-Orch-Projects` is `*`; `403 forbidden` otherwise). Body required: `reason` (1..2000 characters, not blank) and exactly one of `superseded_by` (id of another existing decision in the caller's project scope, not the decision itself) or `answered_elsewhere` (free text, 1..4000, not blank); anything else is `422`. The decision JSON then carries `withdraw_reason`, `superseded_by`, `superseded_by_task_key` and `answered_elsewhere` (all null while open, answered, or withdrawn before migration 0003). `409 not_open` when it is no longer open.
 
 ### `POST /taskboard/api/v1/tasks/{key}/decisions/{decision_id}/answer`
 
@@ -125,7 +125,7 @@ Change `title`, `status`, `labels`, `project` (a move takes the spec's tasks alo
 
 ### `DELETE /taskboard/api/v1/specs/{key}`
 
-Soft-delete a spec (web and delegate listeners; the relay answers `404`). `204`; the spec's tasks are detached.
+Soft-delete a spec (the user, or on the service listener a superleader, i.e. an agent whose `X-Orch-Projects` is `*`; any other agent gets `403 superleader_only`). `204`; the spec's tasks are detached.
 
 ### `GET /taskboard/api/v1/specs/{key}/docs`
 
@@ -165,7 +165,7 @@ Accept a suggestion as the user (web and delegate listeners; the relay has no su
 
 ### `POST /taskboard/api/v1/specs/{key}/comments/{comment_id}/dismiss`
 
-Dismiss a suggestion as the user (web and delegate listeners): marks it `dismissed` and resolves the comment. `409 already_decided`, `422 no_suggestion`.
+Dismiss a suggestion (the user, or a superleader on the service listener; any other agent gets `403 superleader_only`; accept stays user-only): marks it `dismissed` and resolves the comment. `409 already_decided`, `422 no_suggestion`.
 
 Plans (base design 3.17): a spec has one plan header and an ordered set of steps. A step is a task of the spec with a number (`step`, dense from 1); its body (markdown, up to 32 KiB) and todo items (up to 100) are the task ones, and title, body, status, model and refs change through `PATCH /tasks/{key}`. A step is ready when it is open and every dependency is done or dropped. Every change of the step set or order bumps the spec's `steps_version`; a write naming an older one answers `412 stale_version` with `current_steps_version`.
 

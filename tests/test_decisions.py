@@ -210,13 +210,48 @@ async def test_answer_twice_is_409(service_client, web_client):
 async def test_withdraw_by_other_session_403(service_client, web_client):
     key, did = await make(service_client)
     r = await service_client.post(
-        dec_url(key, did, "withdraw"), json=WITHDRAW, headers=agent(S2, "mx-2")
+        dec_url(key, did, "withdraw"),
+        json=WITHDRAW,
+        headers=agent(S2, "mx-2", projects="default"),
+    )
+    assert r.status_code == 403
+    r = await service_client.post(
+        dec_url(key, did, "withdraw"),
+        json=WITHDRAW,
+        headers=agent(S2, "mx-2", projects="default,other"),
     )
     assert r.status_code == 403
     r = await web_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW)
     assert r.status_code == 403
     task = (await web_client.get(f"{TASKS}/{key}")).json()
     assert task["decisions"][0]["status"] == "open"
+
+
+async def test_superleader_withdraws_other_sessions_decision(service_client, web_client, conn):
+    key, did = await make(service_client)
+    r = await service_client.post(
+        dec_url(key, did, "withdraw"), json=WITHDRAW, headers=agent(S2, "sl", projects="*")
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "withdrawn" and body["withdraw_reason"] == "asked twice"
+    assert body["answered_elsewhere"] == "user said so in chat"
+    task = (await web_client.get(f"{TASKS}/{key}")).json()
+    assert task["blocked"] is False
+    ev = [e for e in task["events"] if e["kind"] == "decision_withdrawn"]
+    assert len(ev) == 1 and ev[0]["actor_session"] == S2
+
+
+async def test_superleader_withdraw_still_needs_outcome_and_open(service_client):
+    key, did = await make(service_client)
+    sl = agent(S2, "sl", projects="*")
+    r = await service_client.post(dec_url(key, did, "withdraw"), json={"reason": "x"}, headers=sl)
+    assert r.status_code == 422
+    assert (
+        await service_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW, headers=sl)
+    ).status_code == 200
+    r = await service_client.post(dec_url(key, did, "withdraw"), json=WITHDRAW, headers=sl)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "not_open"
 
 
 async def test_withdraw_only_while_open(service_client, web_client):

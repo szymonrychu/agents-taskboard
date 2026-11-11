@@ -37,6 +37,12 @@ class Actor:
     def may_use(self, project: str) -> bool:
         return self.projects is None or project in self.projects
 
+    @property
+    def is_superleader(self) -> bool:
+        """An agent with scope `*`. The orchestrator relay sends `X-Orch-Projects: *` only for a
+        superleader session (and for its own admin calls), behind the relay token gate."""
+        return self.kind == "agent" and self.projects is None
+
     def default_project(self) -> str:
         """Where a create without `project` goes: an agent's home project, else `default`."""
         return self.home_project or DEFAULT_PROJECT
