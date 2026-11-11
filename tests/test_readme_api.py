@@ -58,7 +58,7 @@ def readme_routes() -> set[str]:
 
 def test_readme_lists_every_route():
     expected = routes_of(create_web_app(SETTINGS, None))  # type: ignore[arg-type]
-    assert len(expected) == 12
+    assert len(expected) == 26
     assert expected - readme_routes() == set(), "undocumented routes"
     assert readme_routes() - expected == set(), "README documents routes the app lacks"
 
@@ -69,6 +69,8 @@ def test_service_routes_are_a_documented_subset():
     assert readme_routes() - service == {
         f"POST {PREFIX}/tasks/{{key}}/decisions/{{decision_id}}/answer",
         f"GET {PREFIX}/stream",
+        f"POST {PREFIX}/specs/{{key}}/comments/{{comment_id}}/accept",
+        f"POST {PREFIX}/specs/{{key}}/comments/{{comment_id}}/dismiss",
     }
     assert f"GET {PREFIX}/projects/summary" in service
 

@@ -79,6 +79,7 @@ async def test_create_returns_full_task_shape(service_client):
         "comments_total",
         "events",
         "events_total",
+        "spec",
         "url",
         "version",
         "created_at",
@@ -541,3 +542,116 @@ async def test_web_created_task_has_user_creator(web_client, conn):
 async def test_service_routes_require_bearer_and_session(service_client):
     assert (await service_client.get(TASKS)).status_code == 401
     assert (await service_client.get(TASKS, headers=AUTH)).status_code == 400
+
+
+SPECS = f"{PREFIX}/specs"
+
+
+@pytest.fixture
+def any_project(service_client, web_client):
+    """Every project slug is an active orchestrator project."""
+    from agents_taskboard.projects import ProjectLookup
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"archived": False})
+
+    for client in (service_client, web_client):
+        client.app.state.projects = ProjectLookup(
+            "http://orch.test", "t", transport=httpx.MockTransport(handle)
+        )
+
+
+async def make_spec(client, project: str, name: str = "s") -> str:
+    r = await client.post(
+        SPECS, json={"name": name, "title": "t", "project": project}, headers=agent()
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["key"]
+
+
+async def test_task_with_spec_takes_spec_project(service_client, web_client, any_project):
+    spec = await make_spec(service_client, "a")
+    r = await web_client.post(TASKS, json={"title": "t", "spec": spec})
+    assert r.status_code == 201, r.text
+    assert (r.json()["project"], r.json()["spec"]) == ("a", spec)
+    r = await service_client.post(
+        TASKS, json={"title": "t", "spec": spec, "project": "a"}, headers=agent(projects="a")
+    )
+    assert (r.status_code, r.json()["spec"]) == (201, spec)
+    r = await web_client.get(f"{SPECS}/{spec}")
+    assert len(r.json()["tasks"]) == 2
+
+
+async def test_explicit_other_project_422_project_mismatch(service_client, web_client, any_project):
+    spec = await make_spec(service_client, "a")
+    r = await web_client.post(TASKS, json={"title": "t", "spec": spec, "project": "b"})
+    assert (r.status_code, r.json()["error"]["code"]) == (422, "project_mismatch")
+    task = await create(web_client, {}, project="b")
+    r = await web_client.patch(
+        f"{TASKS}/{task['key']}", json={"version": 1, "spec": spec, "project": "b"}
+    )
+    assert (r.status_code, r.json()["error"]["code"]) == (422, "project_mismatch")
+
+
+async def test_patch_links_task_to_spec_and_unlinks(service_client, web_client, any_project):
+    spec = await make_spec(service_client, "a")
+    task = await create(web_client, {})
+    r = await web_client.patch(f"{TASKS}/{task['key']}", json={"version": 1, "spec": spec})
+    assert r.status_code == 200, r.text
+    assert (r.json()["project"], r.json()["spec"], r.json()["version"]) == ("a", spec, 2)
+    linked = [e for e in r.json()["events"] if e["kind"] == "spec_set"]
+    assert linked and linked[0]["detail"] == {"from": None, "to": spec}
+    r = await web_client.patch(f"{TASKS}/{task['key']}", json={"version": 2, "spec": None})
+    assert (r.status_code, r.json()["spec"], r.json()["project"]) == (200, None, "a")
+
+
+async def test_task_move_detaches_spec(service_client, web_client, any_project):
+    spec = await make_spec(service_client, "a")
+    task = (await web_client.post(TASKS, json={"title": "t", "spec": spec})).json()
+    r = await web_client.patch(f"{TASKS}/{task['key']}", json={"version": 1, "project": "b"})
+    assert r.status_code == 200, r.text
+    assert (r.json()["project"], r.json()["spec"]) == ("b", None)
+
+
+async def test_spec_move_keeps_tasks_attached(service_client, web_client, any_project):
+    spec = await make_spec(service_client, "a")
+    task = (await web_client.post(TASKS, json={"title": "t", "spec": spec})).json()
+    r = await web_client.patch(f"{SPECS}/{spec}", json={"version": 1, "project": "b"})
+    assert r.status_code == 200
+    r = await web_client.get(f"{TASKS}/{task['key']}")
+    assert (r.json()["project"], r.json()["spec"]) == ("b", spec)
+
+
+async def test_spec_out_of_scope_404(service_client, web_client, any_project):
+    spec = await make_spec(service_client, "a")
+    r = await service_client.post(
+        TASKS, json={"title": "t", "spec": spec}, headers=agent(projects="b")
+    )
+    unknown = await service_client.post(
+        TASKS, json={"title": "t", "spec": "S-999999"}, headers=agent(projects="b")
+    )
+    assert (r.status_code, unknown.status_code) == (404, 404)
+    assert r.json()["error"]["code"] == "not_found"
+    assert r.json()["error"]["message"] == unknown.json()["error"]["message"].replace(
+        "S-999999", spec
+    )
+    task = await create(service_client, agent(projects="b"))
+    r = await service_client.patch(
+        f"{TASKS}/{task['key']}", json={"version": 1, "spec": spec}, headers=agent(projects="b")
+    )
+    assert r.status_code == 404
+    await web_client.delete(f"{SPECS}/{spec}")
+    r = await web_client.post(TASKS, json={"title": "t", "spec": spec})
+    assert r.status_code == 404
+
+
+async def test_list_tasks_by_spec(service_client, web_client, any_project):
+    spec = await make_spec(service_client, "a")
+    other = await make_spec(service_client, "a", name="other")
+    linked = (await web_client.post(TASKS, json={"title": "t", "spec": spec})).json()
+    await web_client.post(TASKS, json={"title": "t", "spec": other})
+    await create(web_client, {})
+    r = await web_client.get(TASKS, params={"spec": spec})
+    assert [t["key"] for t in r.json()["items"]] == [linked["key"]]
+    r = await web_client.get(TASKS, params={"spec": "bogus"})
+    assert r.status_code == 422

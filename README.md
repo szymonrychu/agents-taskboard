@@ -59,19 +59,19 @@ Task keys look like `T-5`. Statuses: `idea`, `open`, `in_progress`, `done`, `dro
 
 ### `GET /taskboard/api/v1/tasks`
 
-List tasks. Query: `status` (`active` default, `done`, `dropped`, `all`), `project`, `session`, `mine` (service listener, the acting session), `waiting` (only tasks with an open decision), `label` (repeatable, any match), `limit` (1..200, default 50), `cursor`. Returns `{"items": [...], "next_cursor": "..."|null}`.
+List tasks. Query: `status` (`active` default, `done`, `dropped`, `all`), `project`, `spec` (tasks linked to that spec, `422` for a malformed key), `session`, `mine` (service listener, the acting session), `waiting` (only tasks with an open decision), `label` (repeatable, any match), `limit` (1..200, default 50), `cursor`. Returns `{"items": [...], "next_cursor": "..."|null}`.
 
 ### `POST /taskboard/api/v1/tasks`
 
-Create an idea or task: `title`, `body`, `kind`, `status`, `labels`, `assignee_session` or `assignee_self` (agents), `client_key`, `project` (default: the agent's one project; `default` for a `*` agent and users). `201` with the task; a repeated `client_key` of the same creator answers `200` with the existing task.
+Create an idea or task: `title`, `body`, `kind`, `status`, `labels`, `assignee_session` or `assignee_self` (agents), `client_key`, `project` (default: the agent's one project; `default` for a `*` agent and users), `spec` (a key `S-n`: the task takes the spec's project; an explicit other `project` is `422 project_mismatch`; a spec outside the scope or deleted is `404 not_found`). `201` with the task; a repeated `client_key` of the same creator answers `200` with the existing task.
 
 ### `GET /taskboard/api/v1/tasks/{key}`
 
-One task with its labels, comments, todo, decisions and history. `404 not_found` for an unknown or malformed key. Optional `events_limit` and `comments_limit` (0..200) return only the newest N events or comments (oldest first); `events_before` and `comments_before` (ids) page back to items with a smaller id. Every task carries `events_total` and `comments_total`. `422 invalid_request` for out-of-range values.
+One task with its labels, linked spec key (`spec`, or null), comments, todo, decisions and history. `404 not_found` for an unknown or malformed key. Optional `events_limit` and `comments_limit` (0..200) return only the newest N events or comments (oldest first); `events_before` and `comments_before` (ids) page back to items with a smaller id. Every task carries `events_total` and `comments_total`. `422 invalid_request` for out-of-range values.
 
 ### `PATCH /taskboard/api/v1/tasks/{key}`
 
-Change `title`, `body`, `status`, `labels`, `project` (a move, logged as `project_changed`), `assignee_session` or `assignee_self`; `version` is required. `412 stale_version` when the task changed, `422 invalid_request` when nothing changes.
+Change `title`, `body`, `status`, `labels`, `project` (a move, logged as `project_changed`; it detaches the task from its spec), `spec` (`S-n` links the task and moves it into the spec's project, `null` unlinks; logged as `spec_set`; `422 project_mismatch` with a different `project`), `assignee_session` or `assignee_self`; `version` is required. `412 stale_version` when the task changed, `422 invalid_request` when nothing changes.
 
 ### `POST /taskboard/api/v1/tasks/{key}/comments`
 
@@ -99,19 +99,77 @@ Answer an open decision as the user: `choice` (option index) or `text`, plus an 
 
 ### `GET /taskboard/api/v1/projects/summary`
 
-Per project in the caller's scope: `[{"project", "open_tasks", "waiting_decisions", "specs": {"draft": 0, "review": 0, "approved": 0}}]`, one grouped query ordered by project. `open_tasks` counts tasks that are not `done` or `dropped`; `waiting_decisions` counts open decisions; the spec counts are zero until specs exist. Optional `project` narrows it to one project. A relay caller sees only its own project (all with `X-Orch-Projects: *`); web and delegate callers see every project. Served on all three listeners.
+Per project in the caller's scope: `[{"project", "open_tasks", "waiting_decisions", "specs": {"draft": 0, "review": 0, "approved": 0}}]`, one grouped query ordered by project. `open_tasks` counts tasks that are not `done` or `dropped`; `waiting_decisions` counts open decisions; `specs` counts live specs by status (deleted and archived ones are not counted), and a project with only specs is listed too. Optional `project` narrows it to one project. A relay caller sees only its own project (all with `X-Orch-Projects: *`); web and delegate callers see every project. Served on all three listeners.
+
+Specs (base design 3.5): a spec `S-<n>` is a named bundle of markdown documents in one project, with status `draft`, `review`, `approved` (set by the user only) or `archived`. Each document (`path` like `plan.md` or `research/topic.md`: `^[a-z0-9][a-z0-9._/-]{0,119}\.md$`, no `..`) has a linear, immutable version history. A write names the version it edited (`base_version`, `0` for a new document); when another write came first it answers `412 stale_version` with `current_version` in the error object, and nothing is written. Caps: document body 192 KiB of UTF-8, 50 documents per spec (`413 payload_too_large`); version `note` up to 500 characters, at most 20 `sources` (opaque refs, `422`). A version written on an `approved` spec returns it to `review`. Spec names are unique per project among live specs; a deleted spec frees its name, answers `404` on every route, and its tasks are detached. Every write appends one event and is announced on the stream.
+
+### `GET /taskboard/api/v1/specs`
+
+List live specs of the caller's scope, newest first, without documents. Query: `project`, `status`, `label` (repeatable, any match), `name`, `limit` (1..200, default 50), `cursor`. Returns `{"items": [...], "next_cursor": "..."|null}`.
+
+### `POST /taskboard/api/v1/specs`
+
+Create a spec: `name` (`^[a-z0-9][a-z0-9-]{0,79}$`), `title` (1..200), `labels`, `project` (default as for tasks), `client_key`, `docs` (`[{path, body, note?, sources?}]`, each at version 1). `201` with the spec; a repeated `client_key` of the same creator answers `200` with the stored spec. `409 name_taken`, `403 project_forbidden`, `422 unknown_project` / `project_archived`.
+
+### `GET /taskboard/api/v1/specs/{key}`
+
+One spec: its fields, `documents` (current `path`, `version`, `size`, `sha256`, `updated_at`, `created_by`), linked task keys (`tasks`) and the open comment count (`open_comments`).
+
+### `PATCH /taskboard/api/v1/specs/{key}`
+
+Change `title`, `status`, `labels`, `project` (a move takes the spec's tasks along), `assignee_session` or `assignee_self`; `version` is required (`412 stale_version`). Agents get `403 user_only` for `approved` and for assigning another session or clearing another session's assignment. An approval records the approved document versions in its event.
+
+### `DELETE /taskboard/api/v1/specs/{key}`
+
+Soft-delete a spec (web and delegate listeners; the relay answers `404`). `204`; the spec's tasks are detached.
+
+### `GET /taskboard/api/v1/specs/{key}/docs`
+
+The current version of every live document, without bodies: `{"items": [...]}`.
+
+### `GET /taskboard/api/v1/specs/{key}/docs/{path:path}`
+
+One document version with its body (`version` query: an older one): `{path, version, body, sha256, size, note, sources, created_by, created_at}`. With `Accept: text/markdown` the raw body with `ETag: "<sha256>"` and `X-Spec-Version`; a matching `If-None-Match` answers `304`. `404` for a missing document or a removal.
+
+### `PUT /taskboard/api/v1/specs/{key}/docs/{path:path}`
+
+Write the next version: `body` (string, or `null` to remove the document), `base_version`, `note`, `sources`, `client_key`. `201` with the version (no body); a repeated `client_key` answers `200` with the stored version.
+
+### `GET /taskboard/api/v1/specs/{key}/docs/{path:path}/versions`
+
+One document's history, newest first, without bodies (`removed` marks a removal). Query: `limit`, `cursor`. Returns `{"items": [...], "next_cursor": <version>|null}`.
+
+### `GET /taskboard/api/v1/specs/{key}/comments`
+
+Comments of a spec, oldest first: `{"items": [...]}`. Query: `path` (one document), `open` (`true`: unresolved only, `false`: resolved only).
+
+### `POST /taskboard/api/v1/specs/{key}/comments`
+
+Comment on a spec: `body` (up to 16 KiB), optional `path`, `version` and `anchor` (a heading slug or `L<a>-L<b>`), `suggestion` (a proposed replacement of the whole document, up to 192 KiB; needs `path`; sets `suggestion_status` to `open`), `attachments` (opaque refs, at most 10), `client_key`. `201`; a repeated `client_key` of the same creator answers `200` with the stored comment. `413 payload_too_large` over a cap.
+
+### `POST /taskboard/api/v1/specs/{key}/comments/{comment_id}/resolve`
+
+Resolve a comment. `409 already_resolved` when it already is.
+
+### `POST /taskboard/api/v1/specs/{key}/comments/{comment_id}/accept`
+
+Accept a suggestion as the user (web and delegate listeners; the relay has no such route): `version` is the document's current version as the client last saw it. Writes the whole `suggestion` as the next version of the comment's document (note `Accepted proposed edit from comment <id>`, `sources` copied from the attachments), marks the suggestion `accepted` with `accepted_version` and resolves the comment, in one transaction and one event. `201` with `{"version", "comment"}`. `412 stale_version` with `current_version` when the document moved on (nothing changes), `409 already_decided`, `422 no_suggestion`.
+
+### `POST /taskboard/api/v1/specs/{key}/comments/{comment_id}/dismiss`
+
+Dismiss a suggestion as the user (web and delegate listeners): marks it `dismissed` and resolves the comment. `409 already_decided`, `422 no_suggestion`.
 
 ### `GET /taskboard/api/v1/stream`
 
-Server-sent events (web listener only): `task_changed` with data `{"key": "T-5", "project": "default"}` whenever a task changes; the optional `project` query parameter delivers only that project's changes. A notification is a hint; the stream also polls every 5 seconds, and a client refetches the task.
+Server-sent events (web and delegate listeners): `task_changed` with data `{"key": "T-5", "project": "default"}` whenever a task changes, and `spec_changed` with data `{"key": "S-2", "project": "default"}` plus, when the change has them, `path` and `version` (a document version), `comment_id` (a comment or a decided suggestion) and `deleted: true` (the spec was deleted). Every event carries `id: <n>`, the id of the event row that caused it. The optional `project` query parameter delivers only that project's changes. Catch-up: reconnect with the `Last-Event-ID` header or the `after_id` query parameter (the larger wins when both are given; a header that is not a number is ignored) and the stream first sends, in id order, one event per task or spec changed after that id, then the live feed. When the id is below the oldest kept event row it sends one `reset` event (data `{}`, `id` the newest row) instead: refetch the lists. A NOTIFY only wakes the stream; it also polls every 5 seconds, and a client refetches what changed.
 
 ### Errors
 
-Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `not_found` (404), `method_not_allowed` (405), `already_answered` and `not_open` (409), `stale_version` (412), `invalid_request`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
+Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open`, `name_taken`, `already_resolved` and `already_decided` (409), `stale_version` (412, on a document with `current_version`), `payload_too_large` (413), `invalid_request`, `no_suggestion`, `project_mismatch`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
 
 ## Notices
 
-A notice wakes a session through the orchestrator messages api. It is created when a decision a session asked is answered, and when a label added to a task matches a label of an active session (once per task and session, never for the creator). The lookup asks the orchestrator for sessions of the task's project plus superleaders (`project=<task project>&superleaders=include`), so a label notice never reaches another project's non-superleader session. The text carries only the task key and the link `TASKBOARD_PUBLIC_BASE_URL/tasks/<key>`, never task content. Delivery is at least once: a crash between the send and the commit re-sends. A `404` from the orchestrator (session gone) ends the notice; any other failure retries with a per-notice backoff.
+A notice wakes a session through the orchestrator messages api. It is created when a decision a session asked is answered, when a label added to a task matches a label of an active session (once per task and session, never for the creator), and when the user comments on a spec, approves it, writes a document version (also by accepting a suggestion) or dismisses a suggestion: that notice goes to the spec's assignee session, else its creating session (none for a spec the user created and nobody is assigned to), and an agent's own change notifies nobody. One pending notice per spec and session absorbs the next ones. The lookup asks the orchestrator for sessions of the task's project plus superleaders (`project=<task project>&superleaders=include`), so a label notice never reaches another project's non-superleader session. The text carries only the key and the link, `Task T-n was updated: TASKBOARD_PUBLIC_BASE_URL/tasks/T-n` or `Spec S-n was updated: TASKBOARD_PUBLIC_BASE_URL/specs/S-n`, never task or spec content. Delivery is at least once: a crash between the send and the commit re-sends. A `404` from the orchestrator (session gone) ends the notice; any other failure retries with a per-notice backoff.
 
 ## Deployment
 

@@ -32,10 +32,21 @@ async def enqueue_label_notice(
     )
 
 
+async def enqueue_spec_notice(conn: psycopg.AsyncConnection, spec_id: int, session_id: str) -> None:
+    """Queue a regular-lane notice that a spec changed by the user; a notice already pending
+    for the same spec and session absorbs this one."""
+    await conn.execute(
+        "INSERT INTO notices (spec_id, session_id, reason, status)"
+        " VALUES (%s, %s, 'spec', 'pending') ON CONFLICT DO NOTHING",
+        (spec_id, session_id),
+    )
+
+
 @dataclass(frozen=True)
 class Notice:
     id: int
-    task_id: int
+    task_id: int | None
+    spec_id: int | None
     session_id: str
     reason: str
 
@@ -44,7 +55,7 @@ async def claim_notice(conn: psycopg.AsyncConnection) -> Notice | None:
     """Lock the oldest due pending notice no other notifier holds. The caller keeps the
     transaction open across the send and `mark_sent`, so a second notifier skips the row."""
     cur = await conn.execute(
-        "SELECT id, task_id, session_id, reason FROM notices"
+        "SELECT id, task_id, spec_id, session_id, reason FROM notices"
         " WHERE status = 'pending' AND next_attempt_at <= now()"
         " ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED"
     )

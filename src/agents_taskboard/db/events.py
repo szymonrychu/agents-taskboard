@@ -1,4 +1,4 @@
-"""The per-task event log and the task_changed NOTIFY hint."""
+"""The event log of tasks and specs and their NOTIFY hints (task_changed, spec_changed)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 from agents_taskboard.api.actors import Actor
 
 CHANNEL = "task_changed"
+SPEC_CHANNEL = "spec_changed"
 
 
 async def append_event(
@@ -39,6 +40,33 @@ async def append_event(
 async def notify_changed(conn: psycopg.AsyncConnection, task_id: int) -> None:
     """The payload is the task id only and a hint; consumers must also poll."""
     await notify(conn, CHANNEL, str(task_id))
+
+
+async def append_spec_event(
+    conn: psycopg.AsyncConnection,
+    spec_id: int,
+    actor: Actor,
+    kind: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Log one event of the spec (no task), stamped with the spec's current project."""
+    await conn.execute(
+        "INSERT INTO events (spec_id, project, actor_kind, actor_session, actor_slug, kind,"
+        " detail) SELECT s.id, s.project, %s, %s, %s, %s, %s FROM specs s WHERE s.id = %s",
+        (
+            actor.kind,
+            actor.session_id,
+            actor.slug,
+            kind,
+            Jsonb(detail) if detail else None,
+            spec_id,
+        ),
+    )
+
+
+async def notify_spec_changed(conn: psycopg.AsyncConnection, spec_id: int) -> None:
+    """The payload is the spec id only and a hint; consumers must also poll."""
+    await notify(conn, SPEC_CHANNEL, str(spec_id))
 
 
 @dataclass(frozen=True)

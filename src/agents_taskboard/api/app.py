@@ -22,6 +22,7 @@ from agents_taskboard.api.actors import actor_from_service, actor_from_web
 from agents_taskboard.api.decisions import build_router as build_decision_router
 from agents_taskboard.api.errors import ApiError, error_response
 from agents_taskboard.api.projects import build_router as build_projects_router
+from agents_taskboard.api.specs import build_spec_router
 from agents_taskboard.api.stream import DEFAULT_POLL_SECONDS, ListenFn, TaskChangeHub
 from agents_taskboard.api.stream import build_router as build_stream_router
 from agents_taskboard.api.tasks import build_router
@@ -87,7 +88,7 @@ def _base_app(settings: Settings, pool: AsyncConnectionPool, title: str) -> Fast
 
     @app.exception_handler(ApiError)
     async def _api_error(_: Request, exc: ApiError) -> JSONResponse:
-        return error_response(exc.status, exc.code, exc.message)
+        return error_response(exc.status, exc.code, exc.message, exc.extra)
 
     @app.exception_handler(RequestValidationError)
     async def _invalid(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -126,7 +127,8 @@ def _user_app(
     stream_poll_seconds: float,
     listen_fn: ListenFn,
 ) -> FastAPI:
-    """The user-actor app: the SSE stream, tasks, todos and decisions with the answer route.
+    """The user-actor app: the SSE stream, tasks, todos, decisions with the answer route and specs
+    with the user-only routes.
     Only the admission gate differs between the web and the delegate listener."""
     app = _base_app(settings, pool, title)
     app.state.hub = TaskChangeHub(
@@ -147,6 +149,7 @@ def _user_app(
     app.include_router(build_todo_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_decision_router(actor_from_web, answerable=True), prefix=PREFIX)
     app.include_router(build_projects_router(actor_from_web), prefix=PREFIX)
+    app.include_router(build_spec_router(actor_from_web, user_routes=True), prefix=PREFIX)
     add_gate(app)
     return app
 
@@ -191,5 +194,6 @@ def create_service_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI
     app.include_router(build_todo_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_decision_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_projects_router(actor_from_service), prefix=PREFIX)
+    app.include_router(build_spec_router(actor_from_service, user_routes=False), prefix=PREFIX)
     app.add_middleware(ServiceTokenGate, tokens=[settings.relay_token.get_secret_value()])
     return app

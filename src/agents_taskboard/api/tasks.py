@@ -10,6 +10,7 @@ from psycopg_pool import AsyncConnectionPool
 from agents_taskboard.api.actors import DEFAULT_PROJECT, Actor
 from agents_taskboard.api.errors import ApiError
 from agents_taskboard.api.schemas import CommentCreate, ListStatus, TaskCreate, TaskPatch
+from agents_taskboard.db import specs as specs_repo
 from agents_taskboard.db import tasks as repo
 from agents_taskboard.labels import normalize_labels
 from agents_taskboard.projects import ProjectLookup
@@ -56,6 +57,23 @@ async def require_target(request: Request, actor: Actor, project: str) -> None:
         await lookup.require_active(project)
 
 
+async def resolve_spec(request: Request, actor: Actor, key: str) -> tuple[int, str]:
+    """(spec id, project) of a live spec in the actor's scope; 404 like an unknown key."""
+    spec_id = specs_repo.parse_spec_key(key)
+    async with pool_of(request).connection() as conn:
+        spec = None if spec_id is None else await specs_repo.get_spec(conn, actor, spec_id)
+    if spec_id is None or spec is None:
+        raise ApiError(404, "not_found", f"no spec {key}")
+    return spec_id, spec["project"]
+
+
+def _mismatch(project: str, spec_project: str) -> None:
+    if project != spec_project:
+        raise ApiError(
+            422, "project_mismatch", f"the spec is in project {spec_project}, not {project}"
+        )
+
+
 def _resolve_assignee(body: TaskCreate | TaskPatch, actor: Actor) -> tuple[bool, str | None]:
     """(set, session): whether the request names an assignee, and which one."""
     if body.assignee_self:
@@ -74,7 +92,14 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
         body: TaskCreate, request: Request, response: Response, actor: ActorDep
     ) -> dict[str, Any]:
         _, assignee = _resolve_assignee(body, actor)
-        project = body.project or actor.default_project()
+        spec_id = None
+        if body.spec is not None:
+            spec_id, spec_project = await resolve_spec(request, actor, body.spec)
+            if body.project is not None:
+                _mismatch(body.project, spec_project)
+            project = spec_project
+        else:
+            project = body.project or actor.default_project()
         await require_target(request, actor, project)
         new = repo.NewTask(
             title=body.title,
@@ -85,9 +110,15 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
             assignee_session=assignee,
             client_key=body.client_key,
             project=project,
+            spec_id=spec_id,
         )
-        async with pool_of(request).connection() as conn:
-            task_id, created = await repo.create_task(conn, actor, new)
+        try:
+            async with pool_of(request).connection() as conn:
+                task_id, created = await repo.create_task(conn, actor, new)
+        except repo.SpecMoved:
+            raise ApiError(422, "project_mismatch", "the spec moved to another project") from None
+        except repo.SpecGone:
+            raise ApiError(404, "not_found", "the spec was deleted") from None
         if not created:
             response.status_code = 200
         return await load_one(request, actor, task_id)
@@ -102,9 +133,15 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
         mine: bool = False,
         waiting: bool = False,
         label: Annotated[list[str] | None, Query()] = None,
+        spec: str | None = None,
         limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = 50,
         cursor: str | None = None,
     ) -> dict[str, Any]:
+        spec_id = None
+        if spec is not None:
+            spec_id = specs_repo.parse_spec_key(spec)
+            if spec_id is None:
+                raise ApiError(422, "invalid_request", "spec must be a key like S-1")
         if mine:
             if actor.session_id is None:
                 raise ApiError(422, "invalid_request", "mine needs an agent session")
@@ -125,6 +162,7 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
                     session=session,
                     waiting=waiting,
                     labels=labels,
+                    spec_id=spec_id,
                     limit=limit,
                     cursor=cursor,
                 )
@@ -161,6 +199,14 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
         is_set, assignee = _resolve_assignee(body, actor)
         if is_set:
             changes["assignee_session"] = assignee
+        if "spec" in body.model_fields_set:
+            if body.spec is None:
+                changes["spec_id"] = None
+            else:
+                changes["spec_id"], spec_project = await resolve_spec(request, actor, body.spec)
+                if "project" in changes:
+                    _mismatch(changes["project"], spec_project)
+                changes["project"] = spec_project
         if not changes:
             raise ApiError(422, "invalid_request", "no fields to change")
         if "project" in changes:
@@ -174,6 +220,10 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
             raise ApiError(404, "not_found", f"no task {key}") from None
         except repo.StaleVersion:
             raise ApiError(412, "stale_version", "task changed since it was read") from None
+        except repo.SpecMoved:
+            raise ApiError(422, "project_mismatch", "the spec moved to another project") from None
+        except repo.SpecGone:
+            raise ApiError(404, "not_found", "the spec was deleted") from None
         return await load_one(request, actor, task_id)
 
     @router.post("/tasks/{key}/comments", status_code=201)

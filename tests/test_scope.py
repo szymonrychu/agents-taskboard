@@ -329,3 +329,85 @@ async def test_agent_create_without_project_checks_its_own_project(service_clien
     assert (r.status_code, r.json()["project"]) == (201, "a")
     r = await service_client.post(TASKS, json={"title": "t"}, headers=scope("old"))
     assert (r.status_code, r.json()["error"]["code"]) == (422, "project_archived")
+
+
+SPECS = f"{TASKS.rsplit('/', 1)[0]}/specs"
+UNKNOWN_SPEC = "S-999999"
+
+SPEC_ROUTES = {
+    "get": lambda key: ("GET", f"{SPECS}/{key}", None),
+    "patch": lambda key: ("PATCH", f"{SPECS}/{key}", {"version": 1, "title": "new"}),
+    "docs": lambda key: ("GET", f"{SPECS}/{key}/docs", None),
+    "doc_get": lambda key: ("GET", f"{SPECS}/{key}/docs/plan.md", None),
+    "doc_put": lambda key: (
+        "PUT",
+        f"{SPECS}/{key}/docs/plan.md",
+        {"body": "x", "base_version": 1},
+    ),
+    "versions": lambda key: ("GET", f"{SPECS}/{key}/docs/plan.md/versions", None),
+    "comments_get": lambda key: ("GET", f"{SPECS}/{key}/comments", None),
+    "comment_post": lambda key: ("POST", f"{SPECS}/{key}/comments", {"body": "x"}),
+    "resolve": lambda key: ("POST", f"{SPECS}/{key}/comments/@CID@/resolve", None),
+}
+
+
+async def make_spec(client, project: str) -> dict:
+    r = await client.post(
+        SPECS,
+        json={"name": "s", "title": "t", "docs": [{"path": "plan.md", "body": "b"}]},
+        headers=scope(project),
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+@pytest.mark.parametrize("route", sorted(SPEC_ROUTES))
+@pytest.mark.parametrize("caller", ["a", "b", "*"])
+async def test_scope_matrix_specs(service_client, conn, route, caller):
+    key = (await make_spec(service_client, "a"))["key"]
+    r = await service_client.post(f"{SPECS}/{key}/comments", json={"body": "c"}, headers=scope("a"))
+    assert r.status_code == 201, r.text
+    cid = str(r.json()["id"])
+    count = (
+        "SELECT (SELECT count(*) FROM events), (SELECT count(*) FROM spec_versions),"
+        " (SELECT count(*) FROM spec_comments), (SELECT count(resolved_at) FROM spec_comments)"
+    )
+    before = conn.execute(count).fetchone()
+    method, url, body = SPEC_ROUTES[route](key)
+    url = url.replace("@CID@", cid)
+    r = await service_client.request(method, url, json=body, headers=scope(caller))
+    if caller == "b":
+        method, url, body = SPEC_ROUTES[route](UNKNOWN_SPEC)
+        url = url.replace("@CID@", cid)
+        unknown = await service_client.request(method, url, json=body, headers=scope(caller))
+        assert (r.status_code, unknown.status_code) == (404, 404), r.text
+        assert r.json() == json.loads(json.dumps(unknown.json()).replace(UNKNOWN_SPEC, key))
+        assert conn.execute(count).fetchone() == before
+    else:
+        assert r.status_code in (200, 201), r.text
+
+
+async def test_spec_create_into_another_project_403(service_client, conn):
+    r = await service_client.post(
+        SPECS, json={"name": "s", "title": "t", "project": "a"}, headers=scope("b")
+    )
+    assert (r.status_code, r.json()["error"]["code"]) == (403, "project_forbidden")
+    assert conn.execute("SELECT count(*) FROM specs").fetchone()[0] == 0
+
+
+async def test_spec_lists_never_cross_projects(service_client):
+    await make_spec(service_client, "a")
+    await make_spec(service_client, "b")
+    for caller, expected in (("a", ["a"]), ("b", ["b"]), ("*", ["a", "b"])):
+        r = await service_client.get(SPECS, headers=scope(caller))
+        assert sorted(s["project"] for s in r.json()["items"]) == expected
+
+
+async def test_task_list_by_spec_never_crosses_projects(service_client):
+    key = (await make_spec(service_client, "a"))["key"]
+    r = await service_client.post(TASKS, json={"title": "t", "spec": key}, headers=scope("a"))
+    assert r.status_code == 201, r.text
+    for caller, expected in (("a", 1), ("b", 0), ("*", 1)):
+        r = await service_client.get(TASKS, params={"spec": key}, headers=scope(caller))
+        assert r.status_code == 200
+        assert len(r.json()["items"]) == expected, caller

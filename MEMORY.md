@@ -2,6 +2,37 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-11 - spec notices, stream ids and catch-up (T-116 A5)
+
+- The stream hub now treats the events table as its only source: NOTIFY on `task_changed` or `spec_changed` (one LISTEN per channel) only wakes the poll, which reads events past its id cursor and publishes `(event id, task or spec, project, payload)`. Why: every SSE event needs `id: <events.id>`, which a NOTIFY payload (the task id) did not carry, and a cursor read never repeats a change the way the old "heard" set had to avoid. A subscription keeps the latest change per task or spec (coalescing), sent in id order.
+- Catch-up accepts both `Last-Event-ID` and `?after_id=` (the larger wins) because agents-web's `openStream` reconnects by building a new `EventSource` with `?after_id=` and cannot set the header. The handler subscribes first, waits for the hub cursor (`hub.ready()`), replays the latest event per key past the id, then skips live changes with an id at or below the last one sent. An id below `min(events.id) - 1` sends one `reset` (with the newest id) and no replay. The stream is user-only, so replay applies no actor scope, only `?project=` (on the event row's project).
+- Spec notices: reason `spec`, `notices.spec_id`, pending unique index `(spec_id, session_id) WHERE reason = 'spec' AND status = 'pending'` (in 0004, still unreleased). Sent for user comments, user approval, user-written versions (also accept) and dismiss, to the assignee else the creator; agents' own writes notify nobody. The notifier also wakes on `spec_changed`.
+- Gate semantics for the stage 4 planning tools (recorded here so they survive): the gate task is the improvement's own task linked to the spec, the lowest-id non-step task of the spec (T-116 Q2 A); the gate opens when its decisions are answered, approval stays optional (Q3 A).
+
+## 2026-11-11 - tasks linked to specs, spec counts (T-116 A4)
+
+- `spec` on task create and PATCH: the spec is looked up in the caller's scope first (404 with the unknown-key body), the task takes the spec's project (an explicit other `project` is 422 `project_mismatch`), and `require_target` still checks that project. A PATCH changing `project` without `spec` sets `spec_id = NULL` in the same UPDATE (the composite FK would refuse the move otherwise); only the spec's own move keeps its tasks attached (FK `ON UPDATE CASCADE`). A spec that moves between lookup and write trips the FK, mapped to 422 `project_mismatch` (`tasks.SpecMoved`). Link changes bump the task version and log `spec_set {from, to}`.
+- `GET /projects/summary` is a FULL JOIN of the task counts and the spec counts per project, so a project with specs but no tasks is listed; deleted and archived specs are not counted. `tests/test_api_tasks.py` task shape gained `spec` (the task JSON changed).
+
+## 2026-11-11 - spec comments, accept and dismiss (T-116 A3)
+
+- Accept is one transaction under the spec row lock: lock the comment, check it has an open suggestion (422 `no_suggestion`, 409 `already_decided`), write the version through `write_version_locked` (a moved document raises `StaleVersion` and the whole transaction rolls back, so the comment stays `open`), then the status-guarded `UPDATE ... WHERE suggestion_status = 'open'`. It logs one event, `suggestion_accepted {path, version, comment_id}`, not a `document_put` plus a second one. The response is `{"version", "comment"}`.
+- Accept and dismiss also resolve the comment (resolver = the deciding user, unless it was already resolved). A suggestion needs `path` (422 otherwise): accept writes the whole suggestion to that document. Comment replay is per (spec, creating session, client_key); users serialise per key with an advisory lock like task creates.
+- Accept and dismiss exist only on user listeners, so the relay answers the plain 404 (no other method shares those paths, so no hidden handler is needed as for DELETE).
+
+## 2026-11-11 - spec and document routes (T-116 A2)
+
+- One router (`api/specs.build_spec_router(actor_dep, user_routes=...)`) on all three listeners. User-only routes exist only with `user_routes=True`; the relay gets a hidden (`include_in_schema=False`) `DELETE /specs/{key}` that answers the plain route 404, because without it Starlette answers 405 for a path that exists with other methods, and the design wants the relay to look like it has no such route.
+- `412 stale_version` on a document carries `current_version` inside the error object (`ApiError(..., extra=...)`); the spec PATCH 412 also does. The 50-document cap answers `413 payload_too_large` like the byte caps ("over the cap the write is refused"); the count caps checked by pydantic (sources 20) are `422`.
+- Document routes use the `{path:path}` converter so `research/a.md` works; `/versions` is registered before the catch-all document route. Paths end in `.md`, so a document can never be named `.../versions`. `tests/test_openapi_current.py` now compares `route.path_format` (the OpenAPI form without `:path`).
+
+## 2026-11-11 - specs schema and repository (T-116 A1)
+
+- Migration is `0004_specs.sql` (0003 was the decision withdrawal; the base design said 0003). No `created_by_device` columns: the device path is stage 3b. Session columns are `text` like `tasks`, not `uuid` as the base design wrote, so one comparison rule holds everywhere.
+- `events.task_id` and `notices.task_id` are nullable now, with `CHECK (num_nonnulls(task_id, spec_id) = 1)`; the label scanner keeps its `JOIN tasks`, so spec events are skipped there. The stream poll ignores spec events until A5 adds `spec_changed`.
+- A document write locks the spec row, compares `base_version` with the current version (a tombstone counts as a version, so re-creating a removed path sends the tombstone's version), and appends exactly one event. A version written on an `approved` spec sets `review` and bumps `specs.version` (so a PATCH based on the approved view is stale); other document writes touch only `updated_at`. Removing a document that is absent or already removed is `NotFound`.
+- Soft delete detaches tasks explicitly (`spec_detached` task event each); the FK `ON DELETE SET NULL (spec_id)` only covers a hard delete, which no route does.
+
 ## 2026-11-09 - withdraw needs a reason and an outcome (T-102)
 
 `POST .../withdraw` now requires a body: `reason` plus exactly one of `superseded_by` (decision id, any task in the caller's project scope, checked with `get_decision`, not itself) or `answered_elsewhere` (text). Why required: an agent that withdraws a question must say where the answer went, so the user sees no silent disappearance. Bodyless calls get 422 on purpose; no compatibility layer, so the orchestrator plugin must be deployed before this version. Migration 0003 adds the columns and the CHECK `decisions_withdrawn_has_outcome` as NOT VALID: withdrawn rows from before it have no outcome and are never rewritten (writes are guarded on status = 'open'), so validating would force a fake backfill; new rows are still checked. `[IF T-102 Q1=A]` restrict superseded_by to the same task and drop `superseded_by_task_key`; `[IF Q2=B]` backfill a reason and VALIDATE.

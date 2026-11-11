@@ -8,7 +8,7 @@ from agents_common.orchestrator import OrchestratorClient
 from test_api_tasks import TASKS, agent, create
 
 from agents_taskboard.db.notices import claim_notice
-from agents_taskboard.notifier import notice_text, run_notifier, send_next
+from agents_taskboard.notifier import notice_text, run_notifier, send_next, spec_notice_text
 from agents_taskboard.settings import Settings
 
 PUBLIC = "https://tasks.example.test"
@@ -218,3 +218,104 @@ async def test_backoff_is_capped(service_client, pool, conn, fake, client):
         "SELECT extract(epoch FROM next_attempt_at - now()) FROM notices"
     ).fetchone()
     assert 59 < float(delay) <= 60
+
+
+SPECS = f"{TASKS.rsplit('/', 1)[0]}/specs"
+
+
+def spec_notices(conn) -> list[tuple]:
+    return conn.execute(
+        "SELECT task_id, spec_id, session_id, reason, status FROM notices"
+        " WHERE reason = 'spec' ORDER BY id"
+    ).fetchall()
+
+
+async def agent_spec(service_client, session: str) -> tuple[str, int]:
+    r = await service_client.post(
+        SPECS,
+        json={"name": "s", "title": "t", "docs": [{"path": "plan.md", "body": "b"}]},
+        headers=agent(session),
+    )
+    assert r.status_code == 201, r.text
+    key = r.json()["key"]
+    return key, int(key[2:])
+
+
+def test_spec_notice_text_is_fixed_template():
+    assert spec_notice_text("S-3", PUBLIC) == f"Spec S-3 was updated: {PUBLIC}/specs/S-3"
+    assert spec_notice_text("S-3", PUBLIC + "/") == f"Spec S-3 was updated: {PUBLIC}/specs/S-3"
+
+
+async def test_user_comment_notifies_creating_session(service_client, web_client, conn):
+    key, spec_id = await agent_spec(service_client, "s-creator")
+    r = await web_client.post(f"{SPECS}/{key}/comments", json={"body": "hm"})
+    assert r.status_code == 201
+    assert spec_notices(conn) == [(None, spec_id, "s-creator", "spec", "pending")]
+    await web_client.post(f"{SPECS}/{key}/comments", json={"body": "again"})
+    assert len(spec_notices(conn)) == 1
+
+
+async def test_user_writes_notify_assignee_else_creator(service_client, web_client, conn):
+    key, spec_id = await agent_spec(service_client, "s-creator")
+    r = await web_client.patch(f"{SPECS}/{key}", json={"version": 1, "assignee_session": "s-w"})
+    assert r.status_code == 200
+    assert spec_notices(conn) == []
+    r = await web_client.put(
+        f"{SPECS}/{key}/docs/plan.md", json={"body": "user edit", "base_version": 1}
+    )
+    assert r.status_code == 201
+    assert spec_notices(conn) == [(None, spec_id, "s-w", "spec", "pending")]
+    conn.execute("UPDATE notices SET status = 'sent', sent_at = now()")
+    r = await web_client.patch(f"{SPECS}/{key}", json={"version": 2, "status": "approved"})
+    assert r.status_code == 200
+    assert spec_notices(conn)[-1] == (None, spec_id, "s-w", "spec", "pending")
+
+
+async def test_accept_and_dismiss_notify(service_client, web_client, conn):
+    key, _ = await agent_spec(service_client, "s-creator")
+    ids = []
+    for text in ("a", "b"):
+        r = await service_client.post(
+            f"{SPECS}/{key}/comments",
+            json={"body": "x", "path": "plan.md", "suggestion": text},
+            headers=agent("s-creator"),
+        )
+        ids.append(r.json()["id"])
+    assert spec_notices(conn) == []
+    r = await web_client.post(f"{SPECS}/{key}/comments/{ids[0]}/accept", json={"version": 1})
+    assert r.status_code == 201
+    assert len(spec_notices(conn)) == 1
+    conn.execute("UPDATE notices SET status = 'sent', sent_at = now()")
+    r = await web_client.post(f"{SPECS}/{key}/comments/{ids[1]}/dismiss")
+    assert r.status_code == 200
+    assert [n[4] for n in spec_notices(conn)] == ["sent", "pending"]
+
+
+async def test_agent_writes_enqueue_nothing(service_client, conn):
+    key, _ = await agent_spec(service_client, "s-creator")
+    h = agent("s-other")
+    await service_client.post(f"{SPECS}/{key}/comments", json={"body": "x"}, headers=h)
+    await service_client.put(
+        f"{SPECS}/{key}/docs/plan.md", json={"body": "y", "base_version": 1}, headers=h
+    )
+    await service_client.patch(f"{SPECS}/{key}", json={"version": 1, "status": "review"}, headers=h)
+    assert spec_notices(conn) == []
+
+
+async def test_user_spec_without_session_has_no_notice(web_client, conn):
+    r = await web_client.post(SPECS, json={"name": "u", "title": "t"})
+    key = r.json()["key"]
+    await web_client.post(f"{SPECS}/{key}/comments", json={"body": "x"})
+    assert spec_notices(conn) == []
+
+
+async def test_spec_notice_is_sent_with_spec_text(
+    service_client, web_client, fast, pool, conn, fake, client
+):
+    sid = add_session(fake)
+    key, _ = await agent_spec(service_client, sid)
+    await web_client.post(f"{SPECS}/{key}/comments", json={"body": "secret comment"})
+    await run_until(fast, pool, client, lambda: [n[4] for n in spec_notices(conn)] == ["sent"])
+    (msg,) = fake.messages.values()
+    assert msg["session_id"] == sid
+    assert msg["text"] == f"Spec {key} was updated: {PUBLIC}/specs/{key}"
