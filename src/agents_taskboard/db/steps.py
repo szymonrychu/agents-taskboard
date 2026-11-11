@@ -32,7 +32,7 @@ from agents_taskboard.db.events import (
 )
 from agents_taskboard.db.scope import scoped
 from agents_taskboard.db.specs import InvalidRequest, NotFound, TooLarge
-from agents_taskboard.db.tasks import parse_key, task_key
+from agents_taskboard.db.tasks import STEP_BODY_CAP, parse_key, task_key
 
 __all__ = [
     "DependencyCycle",
@@ -43,7 +43,6 @@ __all__ = [
     "TooLarge",
 ]
 
-STEP_BODY_CAP = 32 * 1024
 MAX_REFS = 20
 MAX_TODO = 100
 TODO_TEXT_CAP = 200
@@ -145,7 +144,8 @@ _EMPTY_PLAN: dict[str, Any] = {
 
 def _plan_json(row: dict[str, Any]) -> dict[str, Any]:
     row = dict(row)
-    return {**row, "updated_by": specs._by("updated_by", row)}
+    updated_by = specs._by("updated_by", row)  # pops the raw columns
+    return {**row, "updated_by": updated_by}
 
 
 async def get_plan(conn: psycopg.AsyncConnection, spec_id: int) -> dict[str, Any]:
@@ -745,3 +745,52 @@ async def gate_task_id(conn: psycopg.AsyncConnection, spec_id: int) -> int | Non
         (spec_id,),
     )
     return (await cur.fetchone())[0]
+
+
+async def get_gate(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) -> dict[str, Any]:
+    """The spec's gate (T-116 Q2 A, Q3 A): status, the versions of the current approval (null
+    unless approved), the gate task and its decisions other than withdrawn ones. `gate` is
+    `none` with no such decision, `waiting` with an open one, `open` when all are answered;
+    `approved` never gates. Raises NotFound (also outside the actor's projects)."""
+    scope, params = scoped(actor, "s.project")
+    cur = await conn.execute(
+        f"SELECT s.status FROM specs s WHERE s.id = %s AND s.deleted_at IS NULL{scope}",
+        (spec_id, *params),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise NotFound
+    status = row[0]
+    approved_versions = None
+    if status == "approved":
+        cur = await conn.execute(
+            "SELECT detail -> 'versions' FROM events WHERE spec_id = %s AND kind = 'spec_updated'"
+            " AND detail -> 'status' ->> 'to' = 'approved' ORDER BY id DESC LIMIT 1",
+            (spec_id,),
+        )
+        found = await cur.fetchone()
+        approved_versions = found[0] if found else {}
+    gate_id = await gate_task_id(conn, spec_id)
+    decisions: list[dict[str, Any]] = []
+    if gate_id is not None:
+        cur = await conn.cursor(row_factory=dict_row).execute(
+            "SELECT id, question, status, answer FROM decisions"
+            " WHERE task_id = %s AND status <> 'withdrawn' ORDER BY id",
+            (gate_id,),
+        )
+        decisions = list(await cur.fetchall())
+    if not decisions:
+        gate = "none"
+    elif any(d["status"] == "open" for d in decisions):
+        gate = "waiting"
+    else:
+        gate = "open"
+    return {
+        "key": specs.spec_key(spec_id),
+        "status": status,
+        "approved_versions": approved_versions,
+        "gate_task": None if gate_id is None else task_key(gate_id),
+        "decisions": decisions,
+        "gate": gate,
+        "approved": status == "approved",
+    }

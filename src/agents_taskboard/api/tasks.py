@@ -9,8 +9,15 @@ from psycopg_pool import AsyncConnectionPool
 
 from agents_taskboard.api.actors import DEFAULT_PROJECT, Actor
 from agents_taskboard.api.errors import ApiError
-from agents_taskboard.api.schemas import CommentCreate, ListStatus, TaskCreate, TaskPatch
+from agents_taskboard.api.schemas import (
+    CommentCreate,
+    DepsPut,
+    ListStatus,
+    TaskCreate,
+    TaskPatch,
+)
 from agents_taskboard.db import specs as specs_repo
+from agents_taskboard.db import steps as steps_repo
 from agents_taskboard.db import tasks as repo
 from agents_taskboard.labels import normalize_labels
 from agents_taskboard.projects import ProjectLookup
@@ -190,12 +197,16 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
     ) -> dict[str, Any]:
         task_id = task_id_of(key)
         changes: dict[str, Any] = {}
-        for field in ("title", "body", "status", "labels", "project"):
+        for field in ("title", "body", "status", "labels", "project", "refs"):
             if field in body.model_fields_set:
                 value = getattr(body, field)
                 if value is None:
                     raise ApiError(422, "invalid_request", f"{field} cannot be null")
                 changes[field] = value
+        if body.refs is not None:
+            changes["refs"] = [ref.model_dump() for ref in body.refs]
+        if "model" in body.model_fields_set:
+            changes["model"] = body.model
         is_set, assignee = _resolve_assignee(body, actor)
         if is_set:
             changes["assignee_session"] = assignee
@@ -224,6 +235,32 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
             raise ApiError(422, "project_mismatch", "the spec moved to another project") from None
         except repo.SpecGone:
             raise ApiError(404, "not_found", "the spec was deleted") from None
+        except specs_repo.TooLarge as exc:
+            raise ApiError(413, "payload_too_large", str(exc)) from None
+        except specs_repo.InvalidRequest as exc:
+            raise ApiError(422, "invalid_request", str(exc)) from None
+        return await load_one(request, actor, task_id)
+
+    @router.put("/tasks/{key}/deps")
+    async def set_deps(
+        key: str, body: DepsPut, request: Request, actor: ActorDep
+    ) -> dict[str, Any]:
+        """Set one plan step's dependencies (task keys of steps of the same spec)."""
+        task_id = task_id_of(key)
+        depends_on = [repo.parse_key(dep) for dep in body.depends_on]
+        if any(dep is None for dep in depends_on):
+            raise ApiError(422, "invalid_request", "depends_on names task keys like T-1")
+        try:
+            async with pool_of(request).connection() as conn:
+                await steps_repo.set_deps(
+                    conn, actor, task_id, [dep for dep in depends_on if dep is not None]
+                )
+        except steps_repo.NotFound:
+            raise ApiError(404, "not_found", f"no task {key}") from None
+        except steps_repo.DependencyCycle:
+            raise ApiError(422, "dependency_cycle", "the dependencies would form a cycle") from None
+        except steps_repo.InvalidRequest as exc:
+            raise ApiError(422, "invalid_request", str(exc)) from None
         return await load_one(request, actor, task_id)
 
     @router.post("/tasks/{key}/comments", status_code=201)

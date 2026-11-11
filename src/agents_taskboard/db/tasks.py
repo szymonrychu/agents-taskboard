@@ -12,15 +12,27 @@ from typing import Any
 import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.db.events import append_event, notify_changed
 from agents_taskboard.db.scope import scoped
-from agents_taskboard.db.specs import spec_key
+from agents_taskboard.db.specs import check_body, spec_key
 
 ACTIVE = ("idea", "open", "in_progress")
 _KEY = re.compile(r"T-([1-9][0-9]{0,17})")
-PATCH_FIELDS = ("title", "body", "status", "labels", "assignee_session", "project", "spec_id")
+PATCH_FIELDS = (
+    "title",
+    "body",
+    "status",
+    "labels",
+    "assignee_session",
+    "project",
+    "spec_id",
+    "refs",
+    "model",
+)
+STEP_BODY_CAP = 32 * 1024
 
 
 class NotFound(Exception):
@@ -156,12 +168,13 @@ async def patch_task(
     changes: dict[str, Any],
 ) -> bool:
     """Apply `changes` (keys of PATCH_FIELDS) if `version` is current; returns whether anything
-    changed. Raises NotFound (also outside the actor's projects) or StaleVersion."""
+    changed. The body of a plan step is capped at 32 KiB (`specs.TooLarge`). Raises NotFound
+    (also outside the actor's projects) or StaleVersion."""
     scope, scope_params = scoped(actor)
     async with conn.transaction():
         cur = await conn.cursor(row_factory=dict_row).execute(
             "SELECT version, title, body, status, labels, assignee_session, project, spec_id,"
-            f" step FROM tasks t WHERE t.id = %s{scope} FOR UPDATE",
+            f" step, refs, model FROM tasks t WHERE t.id = %s{scope} FOR UPDATE",
             (task_id, *scope_params),
         )
         row = await cur.fetchone()
@@ -175,6 +188,8 @@ async def patch_task(
             changed["spec_id"] = None
         if not changed:
             return False
+        if "body" in changed and row["step"] is not None:
+            check_body(changed["body"], STEP_BODY_CAP)
         left_plan = "spec_id" in changed and row["step"] is not None
         if left_plan:
             # a step leaving its spec loses its number, plan client key and dependencies
@@ -189,13 +204,13 @@ async def patch_task(
                 "UPDATE tasks SET {}, version = version + 1, updated_at = now()"
                 " WHERE id = %s AND version = %s RETURNING id"
             ).format(sql.SQL(", ").join(assignments)),
-            (*changed.values(), task_id, version),
+            (*(Jsonb(v) if k == "refs" else v for k, v in changed.items()), task_id, version),
             changed.get("spec_id"),
             changed.get("project", row["project"]),
         )
         if await cur.fetchone() is None:
             raise StaleVersion
-        plain = [k for k in ("title", "body", "assignee_session") if k in changed]
+        plain = [k for k in ("title", "body", "assignee_session", "refs", "model") if k in changed]
         if plain:
             await append_event(conn, task_id, actor, "updated", {"fields": plain})
         if left_plan:
@@ -409,8 +424,9 @@ async def load_tasks(
         r["id"]: r
         for r in await _rows(
             conn,
-            "SELECT id, project, spec_id, title, body, kind, status, labels, assignee_session,"
-            f" version, created_at, updated_at FROM tasks t WHERE id = ANY(%s){scope}",
+            "SELECT id, project, spec_id, step, title, body, kind, status, labels,"
+            " assignee_session, refs, model, version, created_at, updated_at FROM tasks t"
+            f" WHERE id = ANY(%s){scope}",
             ids,
             tuple(scope_params),
         )
@@ -420,6 +436,11 @@ async def load_tasks(
         return []
     children: dict[str, dict[int, list[dict]]] = {}
     for name, query, *rest in (
+        (
+            "deps",
+            "SELECT d.task_id, d.depends_on FROM task_deps d JOIN tasks p ON p.id = d.depends_on"
+            " WHERE d.task_id = ANY(%s) ORDER BY p.step NULLS LAST, p.id",
+        ),
         (
             "todo",
             "SELECT id, task_id, text, status, position FROM todo_items"
@@ -486,6 +507,9 @@ async def load_tasks(
                 "key": key,
                 **task,
                 "spec": None if spec_id is None else spec_key(spec_id),
+                "depends_on": [
+                    task_key(d["depends_on"]) for d in children["deps"].get(task_id, [])
+                ],
                 "blocked": open_count > 0,
                 "open_decisions": open_count,
                 "waiting_sessions": [

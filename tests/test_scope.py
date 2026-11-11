@@ -476,3 +476,82 @@ async def test_multi_project_summary_lists_granted_projects(service_client):
         f"{TASKS.rsplit('/', 1)[0]}/projects/summary", headers=scope("a,b")
     )
     assert sorted(p["project"] for p in r.json()) == ["a", "b"]
+
+
+PLAN_ROUTES = {
+    "plan_get": lambda key: ("GET", f"{SPECS}/{key}/plan", None),
+    "plan_put": lambda key: (
+        "PUT",
+        f"{SPECS}/{key}/plan",
+        {"version": 0, "goal": "g", "constraints": ["c"]},
+    ),
+    "steps_get": lambda key: ("GET", f"{SPECS}/{key}/steps", None),
+    "steps_put": lambda key: (
+        "PUT",
+        f"{SPECS}/{key}/steps",
+        {"steps_version": 1, "steps": [{"n": 1, "title": "one", "body": "changed"}]},
+    ),
+    "steps_post": lambda key: (
+        "POST",
+        f"{SPECS}/{key}/steps",
+        {"steps_version": 1, "title": "new", "body": "b"},
+    ),
+    "steps_order": lambda key: (
+        "PUT",
+        f"{SPECS}/{key}/steps/order",
+        {"steps_version": 1, "order": ["@T2@", "@T1@"]},
+    ),
+    "steps_next": lambda key: ("POST", f"{SPECS}/{key}/steps/next", {"claim": True}),
+    "gate": lambda key: ("GET", f"{SPECS}/{key}/gate", None),
+    "section": lambda key: ("GET", f"{SPECS}/{key}/docs/plan.md/section?heading=plan", None),
+    "deps": lambda key: ("PUT", f"{TASKS}/@T2@/deps", {"depends_on": ["@T1@"]}),
+}
+
+
+@pytest.mark.parametrize("route", sorted(PLAN_ROUTES))
+@pytest.mark.parametrize("caller", ["a", "b", "*"])
+async def test_scope_matrix_plan_routes(service_client, conn, route, caller):
+    r = await service_client.post(
+        SPECS,
+        json={"name": "s", "title": "t", "docs": [{"path": "plan.md", "body": "# Plan\nx\n"}]},
+        headers=scope("a"),
+    )
+    key = r.json()["key"]
+    r = await service_client.put(
+        f"{SPECS}/{key}/steps",
+        json={
+            "steps_version": 0,
+            "steps": [{"n": 1, "title": "one", "body": "b"}, {"n": 2, "title": "two", "body": "b"}],
+        },
+        headers=scope("a"),
+    )
+    assert r.status_code == 200, r.text
+    t1, t2 = r.json()["keys"]
+    count = (
+        "SELECT (SELECT count(*) FROM events), (SELECT count(*) FROM spec_plans),"
+        " (SELECT count(*) FROM task_deps), (SELECT count(*) FROM tasks),"
+        " (SELECT sum(version) FROM tasks), (SELECT string_agg(status || step, ',' ORDER BY id)"
+        " FROM tasks), (SELECT steps_version FROM specs)"
+    )
+    before = conn.execute(count).fetchone()
+
+    def request(spec_key: str, task_key: str):
+        method, url, body = PLAN_ROUTES[route](spec_key)
+        text = json.dumps(body).replace("@T1@", t1).replace("@T2@", task_key)
+        url = url.replace("@T2@", task_key)
+        return service_client.request(
+            method,
+            url,
+            content=None if body is None else text,
+            headers={**scope(caller), "Content-Type": "application/json"},
+        )
+
+    r = await request(key, t2)
+    if caller == "b":
+        unknown = await request(UNKNOWN_SPEC, UNKNOWN)
+        assert (r.status_code, unknown.status_code) == (404, 404), r.text
+        expected = json.dumps(unknown.json()).replace(UNKNOWN_SPEC, key).replace(UNKNOWN, t2)
+        assert r.json() == json.loads(expected)
+        assert conn.execute(count).fetchone() == before
+    else:
+        assert r.status_code in (200, 201), r.text

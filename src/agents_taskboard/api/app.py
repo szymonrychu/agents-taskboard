@@ -23,6 +23,7 @@ from agents_taskboard.api.decisions import build_router as build_decision_router
 from agents_taskboard.api.errors import ApiError, error_response
 from agents_taskboard.api.projects import build_router as build_projects_router
 from agents_taskboard.api.specs import build_spec_router
+from agents_taskboard.api.steps import build_steps_router
 from agents_taskboard.api.stream import DEFAULT_POLL_SECONDS, ListenFn, TaskChangeHub
 from agents_taskboard.api.stream import build_router as build_stream_router
 from agents_taskboard.api.tasks import build_router
@@ -150,6 +151,7 @@ def _user_app(
     app.include_router(build_decision_router(actor_from_web, answerable=True), prefix=PREFIX)
     app.include_router(build_projects_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_spec_router(actor_from_web, user_routes=True), prefix=PREFIX)
+    app.include_router(build_steps_router(actor_from_web), prefix=PREFIX)
     add_gate(app)
     return app
 
@@ -195,5 +197,6 @@ def create_service_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI
     app.include_router(build_decision_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_projects_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_spec_router(actor_from_service, user_routes=False), prefix=PREFIX)
+    app.include_router(build_steps_router(actor_from_service), prefix=PREFIX)
     app.add_middleware(ServiceTokenGate, tokens=[settings.relay_token.get_secret_value()])
     return app

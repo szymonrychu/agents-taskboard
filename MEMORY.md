@@ -2,6 +2,15 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-11 - plan, steps, deps, next, gate and section routes (T-116 L2)
+
+- One router `api/steps.build_steps_router(actor_dep)` on all three listeners (no user-only plan route); the section route lives in `api/specs.py` next to the other document routes, registered before the catch-all document GET. Writes are scoped in the repository (spec lock), reads call `resolve_spec` first, so every out-of-scope key answers the unknown-key 404 body.
+- 412 on the steps (set, insert, order) carries `current_steps_version`; on the plan header `current_version` (the base design names the steps one; the header follows the document routes). `PUT /specs/{key}/steps` returns `{"keys"}` only (the plugin's `plan_steps_push` returns keys); order returns `{"steps_version"}`; insert and next return the listed step shape; next answers 204 when none is ready.
+- Gate (Q2 A, Q3 A): `GET /specs/{key}/gate` reads the gate task with `gate_task_id`, lists its decisions except withdrawn ones and derives `gate` (`none` / `waiting` / `open`) from them alone; `approved` mirrors the status and never gates. `approved_versions` comes from the latest `spec_updated` event whose status went to `approved` (the approval already records the versions), null unless the spec is approved now, so a later version (which returns it to `review`) clears it.
+- Section slug is a Python port of agents-web `headingId` (`sections.py`, empty slug is `section` like the web). ATX and setext headings count, fenced code does not; link and image markup is reduced to its label before slugging because the web slugs the rendered text. Body under 40000 characters, else cut at the last whole line with `truncated: true` (always present).
+- Task JSON gained `step`, `refs`, `model` and `depends_on` (keys), and PATCH gained `refs` (pydantic `Ref`, at most 20) and `model` (null clears it); a step body over 32 KiB on PATCH is 413 (`tasks.STEP_BODY_CAP`, now the one constant `db/steps.py` uses). `tests/test_api_tasks.py` task shape and the README route count (26 to 36) changed with the contract.
+- Fixed in L1: `_plan_json` unpacked the row before `_by` popped the raw `updated_by_*` columns, so the header leaked them (the response model refused it).
+
 ## 2026-11-11 - plan header and steps schema and repository (T-116 L1)
 
 - Migration is `0005_plan_steps.sql` (0004 was specs). `UNIQUE (spec_id, step)` is `DEFERRABLE INITIALLY DEFERRED` so a renumber commits as a whole. Postgres refuses `ON CONFLICT DO NOTHING` without an arbiter once a deferrable unique exists on the table, so `tasks.create_task` now names its arbiter `(created_by_session, client_key) WHERE client_key IS NOT NULL` (same behaviour, the only other key is the pk).

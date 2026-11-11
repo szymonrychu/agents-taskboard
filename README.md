@@ -67,11 +67,15 @@ Create an idea or task: `title`, `body`, `kind`, `status`, `labels`, `assignee_s
 
 ### `GET /taskboard/api/v1/tasks/{key}`
 
-One task with its labels, linked spec key (`spec`, or null), comments, todo, decisions and history. `404 not_found` for an unknown or malformed key. Optional `events_limit` and `comments_limit` (0..200) return only the newest N events or comments (oldest first); `events_before` and `comments_before` (ids) page back to items with a smaller id. Every task carries `events_total` and `comments_total`. `422 invalid_request` for out-of-range values.
+One task with its labels, linked spec key (`spec`, or null), plan fields (`step` number or null, `refs`, `model`, `depends_on` task keys), comments, todo, decisions and history. `404 not_found` for an unknown or malformed key. Optional `events_limit` and `comments_limit` (0..200) return only the newest N events or comments (oldest first); `events_before` and `comments_before` (ids) page back to items with a smaller id. Every task carries `events_total` and `comments_total`. `422 invalid_request` for out-of-range values.
 
 ### `PATCH /taskboard/api/v1/tasks/{key}`
 
-Change `title`, `body`, `status`, `labels`, `project` (a move, logged as `project_changed`; it detaches the task from its spec), `spec` (`S-n` links the task and moves it into the spec's project, `null` unlinks; logged as `spec_set`; `422 project_mismatch` with a different `project`), `assignee_session` or `assignee_self`; `version` is required. `412 stale_version` when the task changed, `422 invalid_request` when nothing changes.
+Change `title`, `body`, `status`, `labels`, `project` (a move, logged as `project_changed`; it detaches the task from its spec), `spec` (`S-n` links the task and moves it into the spec's project, `null` unlinks; logged as `spec_set`; `422 project_mismatch` with a different `project`), `assignee_session` or `assignee_self`, `refs` (what implements a plan step: `[{kind: pr | commit | branch | tag | url, value}]`, at most 20) and `model` (`haiku`, `sonnet`, `opus`, `fable`, or null); `version` is required. The body of a plan step is capped at 32 KiB (`413 payload_too_large`). `412 stale_version` when the task changed, `422 invalid_request` when nothing changes.
+
+### `PUT /taskboard/api/v1/tasks/{key}/deps`
+
+Set one plan step's dependencies: `depends_on` (task keys of steps of the same spec). `200` with the task. `422 dependency_cycle` when the dependencies would form a cycle (also a step depending on itself), `422 invalid_request` when the task or a dependency is not a step of that spec.
 
 ### `POST /taskboard/api/v1/tasks/{key}/comments`
 
@@ -135,6 +139,10 @@ One document version with its body (`version` query: an older one): `{path, vers
 
 Write the next version: `body` (string, or `null` to remove the document), `base_version`, `note`, `sources`, `client_key`. `201` with the version (no body); a repeated `client_key` answers `200` with the stored version.
 
+### `GET /taskboard/api/v1/specs/{key}/docs/{path:path}/section`
+
+One section of a document, under the agents' tool output budget: `heading` (required) is the anchor slug the web gives the heading (lowercase, runs of characters outside `[a-z0-9]` become `-`, trimmed; the second heading with the same slug is `<slug>-2`), optional `version`. The section is the heading line and the text up to the next heading of the same or a higher level (headings inside fenced code blocks do not count). Returns `{path, version, heading, body, truncated}`; a body of 40000 characters or more is cut at a line boundary below that and `truncated` is true. `404` for a missing document or heading.
+
 ### `GET /taskboard/api/v1/specs/{key}/docs/{path:path}/versions`
 
 One document's history, newest first, without bodies (`removed` marks a removal). Query: `limit`, `cursor`. Returns `{"items": [...], "next_cursor": <version>|null}`.
@@ -159,13 +167,47 @@ Accept a suggestion as the user (web and delegate listeners; the relay has no su
 
 Dismiss a suggestion as the user (web and delegate listeners): marks it `dismissed` and resolves the comment. `409 already_decided`, `422 no_suggestion`.
 
+Plans (base design 3.17): a spec has one plan header and an ordered set of steps. A step is a task of the spec with a number (`step`, dense from 1); its body (markdown, up to 32 KiB) and todo items (up to 100) are the task ones, and title, body, status, model and refs change through `PATCH /tasks/{key}`. A step is ready when it is open and every dependency is done or dropped. Every change of the step set or order bumps the spec's `steps_version`; a write naming an older one answers `412 stale_version` with `current_steps_version`.
+
+### `GET /taskboard/api/v1/specs/{key}/plan`
+
+The plan header: `{goal, architecture, tech_stack, constraints, review_focus, version, updated_at, updated_by}`; `version` 0 and empty fields before the first write.
+
+### `PUT /taskboard/api/v1/specs/{key}/plan`
+
+Replace the plan header: `version` (the one read, 0 for the first write), `goal` (up to 500), `architecture` (up to 4000), `tech_stack` (up to 1000), `constraints` and `review_focus` (at most 50 strings of up to 1000). `200` with the header. `412 stale_version` with `current_version`, `422 invalid_request` over a cap.
+
+### `GET /taskboard/api/v1/specs/{key}/steps`
+
+The steps in order, without bodies: `{"items": [{key, step, title, status, assignee_session, model, refs, version, ready, todo_total, todo_done, deps}], "steps_version": n}` (`deps` are task keys).
+
+### `PUT /taskboard/api/v1/specs/{key}/steps`
+
+Replace the step set (the bulk path for agents): `steps_version` and `steps` (`[{n, title, body, depends_on: [n], model?, labels?, todo?: [text]}]`, `n` dense from 1). Keyed by `n`: new numbers are created, existing ones updated, removed steps that never started are closed `dropped` and lose their number; a set that changes nothing changes nothing. `200` with `{"keys": [...]}` in order. `409 step_in_progress` when the set removes a started or done step, `413 payload_too_large` for a body over 32 KiB, `422 dependency_cycle` / `invalid_request`.
+
+### `POST /taskboard/api/v1/specs/{key}/steps`
+
+Insert one step: `steps_version`, `after` (a step number, `0` for first, absent for last), `title`, `body`, `depends_on` (step numbers), `model`. Later steps are renumbered. `201` with the step as listed.
+
+### `PUT /taskboard/api/v1/specs/{key}/steps/order`
+
+Reorder: `steps_version` and `order` (task keys, every live step exactly once, else `422 invalid_request`). `200` with `{"steps_version": n}`.
+
+### `POST /taskboard/api/v1/specs/{key}/steps/next`
+
+The first ready step in order: `claim` (default false) also makes the caller its assignee and sets it `in_progress` in one guarded update, so two implementers never get the same step. `200` with the step as listed, `204` when none is ready.
+
+### `GET /taskboard/api/v1/specs/{key}/gate`
+
+The spec's human gate: `{key, status, approved_versions, gate_task, decisions, gate, approved}`. The gate task is the improvement's own task linked to the spec: its lowest-id task that is not a step and not dropped (`null` when there is none). `decisions` are that task's decisions other than withdrawn ones (`[{id, question, status, answer}]`); `gate` is `none` with no such decision, `waiting` while one is open and `open` when all are answered. `approved` is `status == "approved"` and does not gate execution; `approved_versions` maps each document to the version the user approved (null unless approved).
+
 ### `GET /taskboard/api/v1/stream`
 
 Server-sent events (web and delegate listeners): `task_changed` with data `{"key": "T-5", "project": "default"}` whenever a task changes, and `spec_changed` with data `{"key": "S-2", "project": "default"}` plus, when the change has them, `path` and `version` (a document version), `comment_id` (a comment or a decided suggestion) and `deleted: true` (the spec was deleted). Every event carries `id: <n>`, the id of the event row that caused it. The optional `project` query parameter delivers only that project's changes. Catch-up: reconnect with the `Last-Event-ID` header or the `after_id` query parameter (the larger wins when both are given; a header that is not a number is ignored) and the stream first sends, in id order, one event per task or spec changed after that id, then the live feed. When the id is below the oldest kept event row it sends one `reset` event (data `{}`, `id` the newest row) instead: refetch the lists. A NOTIFY only wakes the stream; it also polls every 5 seconds, and a client refetches what changed.
 
 ### Errors
 
-Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open`, `name_taken`, `already_resolved` and `already_decided` (409), `stale_version` (412, on a document with `current_version`), `payload_too_large` (413), `invalid_request`, `no_suggestion`, `project_mismatch`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
+Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open`, `name_taken`, `already_resolved`, `already_decided` and `step_in_progress` (409), `stale_version` (412, on a document or the plan header with `current_version`, on the steps with `current_steps_version`), `payload_too_large` (413), `invalid_request`, `no_suggestion`, `dependency_cycle`, `project_mismatch`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
 
 ## Notices
 

@@ -54,10 +54,15 @@ PROJECT_422 = (
 SPEC_ERRORS = {
     403: "forbidden (forbidden, user_only, project_forbidden)",
     404: "no such spec, document or comment (not_found)",
-    409: "conflict (name_taken, already_resolved, already_decided)",
-    412: "changed since it was read (stale_version, with current_version on a document)",
-    422: "invalid request (invalid_request, no_suggestion)",
+    409: "conflict (name_taken, already_resolved, already_decided, step_in_progress)",
+    412: (
+        "changed since it was read (stale_version, with current_version on a document or the"
+        " plan, current_steps_version on the steps)"
+    ),
+    422: "invalid request (invalid_request, no_suggestion, dependency_cycle)",
 }
+
+DEPS_422 = "invalid request (invalid_request, dependency_cycle)"
 
 ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/stream"): (403,),
@@ -65,7 +70,8 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("post", "/tasks"): (403, 404, 422, 503),
     ("get", "/tasks"): (403, 422),
     ("get", "/tasks/{key}"): (403, 404, 422),
-    ("patch", "/tasks/{key}"): (403, 404, 412, 422, 503),
+    ("patch", "/tasks/{key}"): (403, 404, 412, 413, 422, 503),
+    ("put", "/tasks/{key}/deps"): (403, 404, 422),
     ("post", "/tasks/{key}/comments"): (403, 404, 422),
     ("put", "/tasks/{key}/todo"): (403, 404, 422),
     ("patch", "/tasks/{key}/todo/{item_id}"): (403, 404, 422),
@@ -86,6 +92,15 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("post", "/specs/{key}/comments/{comment_id}/resolve"): (403, 404, 409, 422),
     ("post", "/specs/{key}/comments/{comment_id}/accept"): (403, 404, 409, 412, 422),
     ("post", "/specs/{key}/comments/{comment_id}/dismiss"): (403, 404, 409, 422),
+    ("get", "/specs/{key}/docs/{path}/section"): (403, 404, 422),
+    ("get", "/specs/{key}/plan"): (403, 404),
+    ("put", "/specs/{key}/plan"): (403, 404, 412, 422),
+    ("get", "/specs/{key}/steps"): (403, 404),
+    ("put", "/specs/{key}/steps"): (403, 404, 409, 412, 413, 422),
+    ("post", "/specs/{key}/steps"): (403, 404, 412, 413, 422),
+    ("put", "/specs/{key}/steps/order"): (403, 404, 412, 422),
+    ("post", "/specs/{key}/steps/next"): (403, 404, 422),
+    ("get", "/specs/{key}/gate"): (403, 404),
 }
 
 PROJECT_ROUTES = {
@@ -117,6 +132,8 @@ def _document() -> dict[str, Any]:
             for status in ROUTE_ERRORS[route]:
                 if status == 422 and route in PROJECT_ROUTES:
                     description = PROJECT_422
+                elif status == 422 and route == ("put", "/tasks/{key}/deps"):
+                    description = DEPS_422
                 elif route[1].startswith("/specs") and status in SPEC_ERRORS:
                     description = SPEC_ERRORS[status]
                 else:
