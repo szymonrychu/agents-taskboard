@@ -272,6 +272,22 @@ async def test_versions_path_with_slash(service_client, web_client):
     assert "body" not in r.json()["items"][0]
 
 
+async def test_versions_of_a_path_that_never_existed_404(service_client, web_client):
+    spec = await make_spec(service_client)
+    r = await web_client.get(f"{doc_url(spec['key'], 'nope.md')}/versions")
+    assert (r.status_code, r.json()["error"]["code"]) == (404, "not_found")
+
+
+async def test_lone_surrogate_body_422(service_client):
+    spec = await make_spec(service_client)
+    r = await service_client.put(
+        doc_url(spec["key"]),
+        content=b'{"body": "a\\ud800", "base_version": 1}',
+        headers={**agent(), "content-type": "application/json"},
+    )
+    assert (r.status_code, r.json()["error"]["code"]) == (422, "invalid_request")
+
+
 async def test_delete_relay_404_user_204_then_404_everywhere(service_client, web_client):
     spec = await make_spec(service_client)
     url = f"{SPECS}/{spec['key']}"

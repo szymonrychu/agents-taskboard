@@ -81,7 +81,13 @@ def check_path(path: str) -> None:
 
 
 def check_body(body: str | None, cap: int = BODY_CAP) -> None:
-    if body is not None and len(body.encode()) > cap:
+    if body is None:
+        return
+    try:
+        size = len(body.encode())
+    except UnicodeEncodeError:
+        raise InvalidRequest("body is not valid UTF-8 text") from None
+    if size > cap:
         raise TooLarge(f"over {cap} bytes")
 
 
@@ -352,6 +358,8 @@ async def write_version_locked(
         )
         stored = await cur.fetchone()
         if stored is not None:
+            if stored["path"] != path:
+                raise InvalidRequest("client_key already used for another document")
             return version_json(stored), False
     current, live = await _current(conn, spec_id, path)
     if base_version != current:
@@ -375,7 +383,7 @@ async def write_version_locked(
     if body is None:
         detail["removed"] = True
     if returned:
-        detail["status"] = "review"
+        detail["status"] = {"from": "approved", "to": "review"}
     await append_spec_event(conn, spec_id, actor, kind, detail)
     await _notify_owner(conn, actor, spec)
     await notify_spec_changed(conn, spec_id)
@@ -480,7 +488,8 @@ async def soft_delete(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int)
     async with conn.transaction():
         await _lock_spec(conn, actor, spec_id)
         cur = await conn.execute(
-            "UPDATE tasks SET spec_id = NULL, updated_at = now() WHERE spec_id = %s RETURNING id",
+            "UPDATE tasks SET spec_id = NULL, version = version + 1, updated_at = now()"
+            " WHERE spec_id = %s RETURNING id",
             (spec_id,),
         )
         detached = [r[0] for r in await cur.fetchall()]
@@ -604,9 +613,11 @@ async def patch_spec(
         if "project" in changed:
             detail["project"] = {"from": row["project"], "to": changed["project"]}
             cur = await conn.execute(
-                "SELECT id FROM tasks WHERE spec_id = %s ORDER BY id", (spec_id,)
+                "UPDATE tasks SET version = version + 1, updated_at = now()"
+                " WHERE spec_id = %s RETURNING id",
+                (spec_id,),
             )
-            for (task_id,) in await cur.fetchall():
+            for (task_id,) in sorted(await cur.fetchall()):
                 await append_event(
                     conn,
                     task_id,
@@ -688,6 +699,22 @@ async def _replayed_comment(
     return row[0] if row else None
 
 
+async def _require_document(
+    conn: psycopg.AsyncConnection, spec_id: int, path: str, version: int | None
+) -> None:
+    """A comment's path names a live document and its version one that exists; else NotFound."""
+    _, live = await _current(conn, spec_id, path)
+    if not live:
+        raise NotFound
+    if version is not None:
+        cur = await conn.execute(
+            "SELECT 1 FROM spec_versions WHERE spec_id = %s AND path = %s AND version = %s",
+            (spec_id, path, version),
+        )
+        if await cur.fetchone() is None:
+            raise NotFound
+
+
 async def add_comment(
     conn: psycopg.AsyncConnection,
     actor: Actor,
@@ -714,6 +741,8 @@ async def add_comment(
     check_body(suggestion)
     async with conn.transaction():
         spec = await _lock_spec(conn, actor, spec_id)
+        if path is not None:
+            await _require_document(conn, spec_id, path, version)
         if client_key is not None:
             existing = await _replayed_comment(conn, actor, spec_id, client_key)
             if existing is not None:

@@ -52,7 +52,7 @@ PROJECT_422 = (
 )
 
 SPEC_ERRORS = {
-    403: "forbidden (forbidden, user_only)",
+    403: "forbidden (forbidden, user_only, project_forbidden)",
     404: "no such spec, document or comment (not_found)",
     409: "conflict (name_taken, already_resolved, already_decided)",
     412: "changed since it was read (stale_version, with current_version on a document)",

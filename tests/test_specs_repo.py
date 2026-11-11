@@ -272,3 +272,76 @@ async def test_every_write_appends_one_event_with_spec_and_project(pool, conn):
     rows = events_of(conn, sid)
     assert len(rows) == 4
     assert all(project == "a" and task is None for _, project, task in rows)
+
+
+async def test_lone_surrogate_is_a_refusal_not_a_crash():
+    with pytest.raises(repo.InvalidRequest):
+        repo.check_body("a\ud800")
+
+
+async def test_client_key_replay_is_per_document(pool):
+    spec = await make(pool)
+    sid = spec_id_of(spec)
+    await put(pool, sid, body="two", base=1, client_key="k")
+    with pytest.raises(repo.InvalidRequest):
+        await put(pool, sid, path="b.md", body="x", base=0, client_key="k")
+
+
+async def test_comment_needs_a_live_document_and_version(pool):
+    spec = await make(pool)
+    sid = spec_id_of(spec)
+
+    async def add(**over):
+        kw = dict(
+            path=None,
+            version=None,
+            anchor=None,
+            body="b",
+            suggestion=None,
+            attachments=[],
+            client_key=None,
+        )
+        async with pool.connection() as c:
+            return await repo.add_comment(c, AGENT, sid, **{**kw, **over})
+
+    for over in ({"path": "nope.md"}, {"path": "plan.md", "version": 9}):
+        with pytest.raises(repo.NotFound):
+            await add(**over)
+    await add(path="plan.md", version=1)
+    await put(pool, sid, body=None, base=1)
+    with pytest.raises(repo.NotFound):
+        await add(path="plan.md")
+
+
+async def _task_in(conn, sid: int) -> int:
+    return conn.execute(
+        "INSERT INTO tasks (title, kind, status, created_by_kind, spec_id)"
+        " VALUES ('t', 'task', 'open', 'user', %s) RETURNING id",
+        (sid,),
+    ).fetchone()[0]
+
+
+async def test_soft_delete_and_move_bump_task_versions(pool, conn):
+    spec = await make(pool)
+    sid = spec_id_of(spec)
+    moved = await _task_in(conn, sid)
+    async with pool.connection() as c:
+        await repo.patch_spec(c, USER, sid, 1, {"project": "b"})
+    assert conn.execute("SELECT version FROM tasks WHERE id = %s", (moved,)).fetchone() == (2,)
+    async with pool.connection() as c:
+        await repo.soft_delete(c, USER, sid)
+    assert conn.execute("SELECT version FROM tasks WHERE id = %s", (moved,)).fetchone() == (3,)
+
+
+async def test_review_return_event_status_has_from_and_to(pool, conn):
+    spec = await make(pool)
+    sid = spec_id_of(spec)
+    async with pool.connection() as c:
+        await repo.patch_spec(c, USER, sid, 1, {"status": "approved"})
+    await put(pool, sid, base=1, actor=USER)
+    detail = conn.execute(
+        "SELECT detail FROM events WHERE spec_id = %s AND kind = 'document_put'"
+        " ORDER BY id DESC LIMIT 1",
+        (sid,),
+    ).fetchone()[0]
+    assert detail["status"] == {"from": "approved", "to": "review"}

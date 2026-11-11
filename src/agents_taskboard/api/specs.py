@@ -211,6 +211,8 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
             items, next_cursor = await repo.list_versions(
                 conn, spec_id_of(spec["key"]), path, limit, cursor
             )
+        if not items and cursor is None:
+            raise ApiError(404, "not_found", f"no document {path} in {key}")
         return {"items": items, "next_cursor": next_cursor}
 
     @router.get(
