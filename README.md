@@ -101,13 +101,51 @@ Answer an open decision as the user: `choice` (option index) or `text`, plus an 
 
 Per project in the caller's scope: `[{"project", "open_tasks", "waiting_decisions", "specs": {"draft": 0, "review": 0, "approved": 0}}]`, one grouped query ordered by project. `open_tasks` counts tasks that are not `done` or `dropped`; `waiting_decisions` counts open decisions; the spec counts are zero until specs exist. Optional `project` narrows it to one project. A relay caller sees only its own project (all with `X-Orch-Projects: *`); web and delegate callers see every project. Served on all three listeners.
 
+Specs (base design 3.5): a spec `S-<n>` is a named bundle of markdown documents in one project, with status `draft`, `review`, `approved` (set by the user only) or `archived`. Each document (`path` like `plan.md` or `research/topic.md`: `^[a-z0-9][a-z0-9._/-]{0,119}\.md$`, no `..`) has a linear, immutable version history. A write names the version it edited (`base_version`, `0` for a new document); when another write came first it answers `412 stale_version` with `current_version` in the error object, and nothing is written. Caps: document body 192 KiB of UTF-8, 50 documents per spec (`413 payload_too_large`); version `note` up to 500 characters, at most 20 `sources` (opaque refs, `422`). A version written on an `approved` spec returns it to `review`. Spec names are unique per project among live specs; a deleted spec frees its name, answers `404` on every route, and its tasks are detached. Every write appends one event and is announced on the stream.
+
+### `GET /taskboard/api/v1/specs`
+
+List live specs of the caller's scope, newest first, without documents. Query: `project`, `status`, `label` (repeatable, any match), `name`, `limit` (1..200, default 50), `cursor`. Returns `{"items": [...], "next_cursor": "..."|null}`.
+
+### `POST /taskboard/api/v1/specs`
+
+Create a spec: `name` (`^[a-z0-9][a-z0-9-]{0,79}$`), `title` (1..200), `labels`, `project` (default as for tasks), `client_key`, `docs` (`[{path, body, note?, sources?}]`, each at version 1). `201` with the spec; a repeated `client_key` of the same creator answers `200` with the stored spec. `409 name_taken`, `403 project_forbidden`, `422 unknown_project` / `project_archived`.
+
+### `GET /taskboard/api/v1/specs/{key}`
+
+One spec: its fields, `documents` (current `path`, `version`, `size`, `sha256`, `updated_at`, `created_by`), linked task keys (`tasks`) and the open comment count (`open_comments`).
+
+### `PATCH /taskboard/api/v1/specs/{key}`
+
+Change `title`, `status`, `labels`, `project` (a move takes the spec's tasks along), `assignee_session` or `assignee_self`; `version` is required (`412 stale_version`). Agents get `403 user_only` for `approved` and for assigning another session or clearing another session's assignment. An approval records the approved document versions in its event.
+
+### `DELETE /taskboard/api/v1/specs/{key}`
+
+Soft-delete a spec (web and delegate listeners; the relay answers `404`). `204`; the spec's tasks are detached.
+
+### `GET /taskboard/api/v1/specs/{key}/docs`
+
+The current version of every live document, without bodies: `{"items": [...]}`.
+
+### `GET /taskboard/api/v1/specs/{key}/docs/{path:path}`
+
+One document version with its body (`version` query: an older one): `{path, version, body, sha256, size, note, sources, created_by, created_at}`. With `Accept: text/markdown` the raw body with `ETag: "<sha256>"` and `X-Spec-Version`; a matching `If-None-Match` answers `304`. `404` for a missing document or a removal.
+
+### `PUT /taskboard/api/v1/specs/{key}/docs/{path:path}`
+
+Write the next version: `body` (string, or `null` to remove the document), `base_version`, `note`, `sources`, `client_key`. `201` with the version (no body); a repeated `client_key` answers `200` with the stored version.
+
+### `GET /taskboard/api/v1/specs/{key}/docs/{path:path}/versions`
+
+One document's history, newest first, without bodies (`removed` marks a removal). Query: `limit`, `cursor`. Returns `{"items": [...], "next_cursor": <version>|null}`.
+
 ### `GET /taskboard/api/v1/stream`
 
 Server-sent events (web listener only): `task_changed` with data `{"key": "T-5", "project": "default"}` whenever a task changes; the optional `project` query parameter delivers only that project's changes. A notification is a hint; the stream also polls every 5 seconds, and a client refetches the task.
 
 ### Errors
 
-Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `not_found` (404), `method_not_allowed` (405), `already_answered` and `not_open` (409), `stale_version` (412), `invalid_request`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
+Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open` and `name_taken` (409), `stale_version` (412, on a document with `current_version`), `payload_too_large` (413), `invalid_request`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
 
 ## Notices
 

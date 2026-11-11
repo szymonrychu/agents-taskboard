@@ -26,8 +26,8 @@ def _paths(app) -> set[str]:
 
     def walk(router, prefix=""):
         for route in router.routes:
-            if isinstance(route, APIRoute):
-                out.add(prefix + route.path)
+            if isinstance(route, APIRoute) and route.include_in_schema:
+                out.add(prefix + route.path_format)
             elif hasattr(route, "original_router"):
                 walk(route.original_router, prefix + route.include_context.prefix)
 

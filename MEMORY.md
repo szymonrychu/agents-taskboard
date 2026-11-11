@@ -2,6 +2,12 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-11 - spec and document routes (T-116 A2)
+
+- One router (`api/specs.build_spec_router(actor_dep, user_routes=...)`) on all three listeners. User-only routes exist only with `user_routes=True`; the relay gets a hidden (`include_in_schema=False`) `DELETE /specs/{key}` that answers the plain route 404, because without it Starlette answers 405 for a path that exists with other methods, and the design wants the relay to look like it has no such route.
+- `412 stale_version` on a document carries `current_version` inside the error object (`ApiError(..., extra=...)`); the spec PATCH 412 also does. The 50-document cap answers `413 payload_too_large` like the byte caps ("over the cap the write is refused"); the count caps checked by pydantic (sources 20) are `422`.
+- Document routes use the `{path:path}` converter so `research/a.md` works; `/versions` is registered before the catch-all document route. Paths end in `.md`, so a document can never be named `.../versions`. `tests/test_openapi_current.py` now compares `route.path_format` (the OpenAPI form without `:path`).
+
 ## 2026-11-11 - specs schema and repository (T-116 A1)
 
 - Migration is `0004_specs.sql` (0003 was the decision withdrawal; the base design said 0003). No `created_by_device` columns: the device path is stage 3b. Session columns are `text` like `tasks`, not `uuid` as the base design wrote, so one comparison rule holds everywhere.

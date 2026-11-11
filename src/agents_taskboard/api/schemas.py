@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -131,3 +131,44 @@ class DecisionWithdraw(_Strict):
         if (self.superseded_by is None) == (self.answered_elsewhere is None):
             raise ValueError("give exactly one of superseded_by and answered_elsewhere")
         return self
+
+
+SpecStatus = Literal["draft", "review", "approved", "archived"]
+SpecName = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+Note = Field(default=None, max_length=500)
+Sources = Field(default=[], max_length=20)
+ClientKey = Field(default=None, min_length=1, max_length=200)
+
+
+class DocumentIn(_Strict):
+    path: str = Field(min_length=1, max_length=200)
+    body: str
+    note: str | None = Note
+    sources: list[dict[str, Any]] = Sources
+
+
+class SpecCreate(_Labelled):
+    project: str | None = ProjectSlug
+    name: str = SpecName
+    title: str = Title
+    labels: list[str] = []
+    client_key: str | None = ClientKey
+    docs: list[DocumentIn] = []
+
+
+class SpecPatch(_Labelled):
+    version: int
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    status: SpecStatus | None = None
+    labels: list[str] | None = None
+    project: str | None = ProjectSlug
+    assignee_session: str | None = None
+    assignee_self: bool = False
+
+
+class DocumentPut(_Strict):
+    body: str | None
+    base_version: int = Field(ge=0)
+    note: str | None = Note
+    sources: list[dict[str, Any]] = Sources
+    client_key: str | None = ClientKey

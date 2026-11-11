@@ -480,3 +480,129 @@ async def soft_delete(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int)
             await notify_changed(conn, task_id)
         await append_spec_event(conn, spec_id, actor, "spec_deleted", {"deleted": True})
         await notify_spec_changed(conn, spec_id)
+
+
+class UserOnly(Exception):
+    pass
+
+
+class BadCursor(ValueError):
+    pass
+
+
+PATCH_FIELDS = ("title", "status", "labels", "project", "assignee_session")
+
+
+async def list_specs(
+    conn: psycopg.AsyncConnection,
+    actor: Actor,
+    *,
+    project: str | None = None,
+    status: str | None = None,
+    labels: list[str] | None = None,
+    name: str | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Live specs of the actor's projects, newest first, without documents; the cursor is the
+    last id listed. Scope applies to every page."""
+    scope, params = scoped(actor, "s.project")
+    where = ["TRUE" + scope]
+    args: list[Any] = [*params]
+    for column, value in (("s.project", project), ("s.status", status), ("s.name", name)):
+        if value is not None:
+            where.append(f"{column} = %s")
+            args.append(value)
+    if labels:
+        where.append("s.labels && %s::text[]")
+        args.append(labels)
+    if cursor is not None:
+        if not cursor.isdigit():
+            raise BadCursor("invalid cursor")
+        where.append("s.id < %s")
+        args.append(int(cursor))
+    rows = await _spec_rows(
+        conn, " AND ".join(where) + " ORDER BY s.id DESC LIMIT %s", (*args, limit + 1)
+    )
+    next_cursor = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        next_cursor = str(rows[-1]["id"])
+    return [spec_row_json(r) for r in rows], next_cursor
+
+
+async def patch_spec(
+    conn: psycopg.AsyncConnection,
+    actor: Actor,
+    spec_id: int,
+    version: int,
+    changes: dict[str, Any],
+) -> bool:
+    """Apply `changes` (keys of PATCH_FIELDS, plus `assignee_slug` with `assignee_session`) if
+    `version` is current; returns whether anything changed. An agent may assign only itself and
+    clear only itself, and never approve (UserOnly). A move takes the spec's tasks along (FK
+    cascade); each moved task gets a `project_changed` event. One spec event per write; an
+    approval records the document versions it approved. Raises NotFound, StaleVersion,
+    UserOnly, NameTaken."""
+    scope, params = scoped(actor, "s.project")
+    async with conn.transaction():
+        cur = await conn.cursor(row_factory=dict_row).execute(
+            "SELECT s.id, s.version, s.title, s.status, s.labels, s.project,"
+            " s.assignee_session, s.assignee_slug FROM specs s"
+            f" WHERE s.id = %s AND s.deleted_at IS NULL{scope} FOR UPDATE",
+            (spec_id, *params),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            raise NotFound
+        if row["version"] != version:
+            raise StaleVersion(row["version"])
+        changed = {k: changes[k] for k in PATCH_FIELDS if k in changes and row[k] != changes[k]}
+        if actor.kind == "agent":
+            if changed.get("status") == "approved":
+                raise UserOnly("only the user approves a spec")
+            if "assignee_session" in changed:
+                new = changed["assignee_session"]
+                old = row["assignee_session"]
+                if new is not None and new != actor.session_id:
+                    raise UserOnly("an agent can assign only itself")
+                if new is None and old not in (None, actor.session_id):
+                    raise UserOnly("an agent can clear only its own assignment")
+        if not changed:
+            return False
+        if "assignee_session" in changed:
+            changed["assignee_slug"] = changes.get("assignee_slug")
+        assignments = ", ".join(f"{k} = %s" for k in changed)
+        try:
+            async with conn.transaction():
+                await conn.execute(
+                    f"UPDATE specs SET {assignments}, version = version + 1, updated_at = now()"
+                    " WHERE id = %s",
+                    (*changed.values(), spec_id),
+                )
+        except psycopg.errors.UniqueViolation:
+            raise NameTaken from None
+        detail: dict[str, Any] = {"fields": [k for k in changed if k != "assignee_slug"]}
+        if "status" in changed:
+            detail["status"] = {"from": row["status"], "to": changed["status"]}
+            if changed["status"] == "approved":
+                detail["versions"] = {
+                    d["path"]: d["version"] for d in await list_documents(conn, spec_id)
+                }
+        if "project" in changed:
+            detail["project"] = {"from": row["project"], "to": changed["project"]}
+            cur = await conn.execute(
+                "SELECT id FROM tasks WHERE spec_id = %s ORDER BY id", (spec_id,)
+            )
+            for (task_id,) in await cur.fetchall():
+                await append_event(
+                    conn,
+                    task_id,
+                    actor,
+                    "project_changed",
+                    {"from": row["project"], "to": changed["project"], "spec": spec_key(spec_id)},
+                )
+                await notify_changed(conn, task_id)
+        await append_spec_event(conn, spec_id, actor, "spec_updated", detail)
+        await notify_spec_changed(conn, spec_id)
+        return True

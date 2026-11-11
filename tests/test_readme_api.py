@@ -58,7 +58,7 @@ def readme_routes() -> set[str]:
 
 def test_readme_lists_every_route():
     expected = routes_of(create_web_app(SETTINGS, None))  # type: ignore[arg-type]
-    assert len(expected) == 12
+    assert len(expected) == 21
     assert expected - readme_routes() == set(), "undocumented routes"
     assert readme_routes() - expected == set(), "README documents routes the app lacks"
 

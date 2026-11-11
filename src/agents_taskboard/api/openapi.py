@@ -42,11 +42,19 @@ ERRORS = {
     404: "no such task, decision or todo item (not_found)",
     409: "the decision is not open (already_answered, not_open)",
     412: "the task changed since it was read (stale_version)",
+    413: "over a size cap (payload_too_large)",
     422: "invalid request (invalid_request)",
     503: "the orchestrator cannot validate the project (upstream_unavailable)",
 }
 
 PROJECT_422 = "invalid request (invalid_request, unknown_project, project_archived)"
+
+SPEC_ERRORS = {
+    403: "forbidden (forbidden, user_only)",
+    404: "no such spec, document or comment (not_found)",
+    409: "conflict (name_taken)",
+    412: "changed since it was read (stale_version, with current_version on a document)",
+}
 
 ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/stream"): (403,),
@@ -61,9 +69,23 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("post", "/tasks/{key}/decisions"): (403, 404, 422),
     ("post", "/tasks/{key}/decisions/{decision_id}/withdraw"): (403, 404, 409, 422),
     ("post", "/tasks/{key}/decisions/{decision_id}/answer"): (403, 404, 409, 422),
+    ("get", "/specs"): (403, 422),
+    ("post", "/specs"): (403, 409, 413, 422, 503),
+    ("get", "/specs/{key}"): (403, 404),
+    ("patch", "/specs/{key}"): (403, 404, 409, 412, 422, 503),
+    ("delete", "/specs/{key}"): (403, 404),
+    ("get", "/specs/{key}/docs"): (403, 404),
+    ("get", "/specs/{key}/docs/{path}"): (403, 404, 422),
+    ("put", "/specs/{key}/docs/{path}"): (403, 404, 412, 413, 422),
+    ("get", "/specs/{key}/docs/{path}/versions"): (403, 404, 422),
 }
 
-PROJECT_ROUTES = {("post", "/tasks"), ("patch", "/tasks/{key}")}
+PROJECT_ROUTES = {
+    ("post", "/tasks"),
+    ("patch", "/tasks/{key}"),
+    ("post", "/specs"),
+    ("patch", "/specs/{key}"),
+}
 
 
 def _document() -> dict[str, Any]:
@@ -81,14 +103,18 @@ def _document() -> dict[str, Any]:
             continue
         for method, operation in methods.items():
             responses = operation["responses"]
-            for status in [s for s in responses if not s.startswith("2")]:
+            for status in [s for s in responses if not s.startswith(("2", "3"))]:
                 del responses[status]
-            for status in ROUTE_ERRORS[(method, path.removeprefix(PREFIX))]:
-                project_422 = (
-                    status == 422 and (method, path.removeprefix(PREFIX)) in PROJECT_ROUTES
-                )
+            route = (method, path.removeprefix(PREFIX))
+            for status in ROUTE_ERRORS[route]:
+                if status == 422 and route in PROJECT_ROUTES:
+                    description = PROJECT_422
+                elif route[1].startswith("/specs") and status in SPEC_ERRORS:
+                    description = SPEC_ERRORS[status]
+                else:
+                    description = ERRORS[status]
                 responses[str(status)] = {
-                    "description": PROJECT_422 if project_422 else ERRORS[status],
+                    "description": description,
                     "content": {"application/json": {"schema": ERROR_REF}},
                 }
     schemas = doc["components"]["schemas"]
