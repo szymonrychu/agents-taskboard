@@ -55,6 +55,7 @@ def test_applies_twice_idempotent(empty_db_url):
         "0001_taskboard.sql",
         "0002_projects.sql",
         "0003_decision_withdrawal.sql",
+        "0004_specs.sql",
     ]
     assert run_migrations(empty_db_url, PACKAGE) == []
     with psycopg.connect(empty_db_url) as conn:
@@ -231,6 +232,7 @@ def test_migration_backfills_default(empty_db_url):
     assert run_migrations(empty_db_url, PACKAGE) == [
         "0002_projects.sql",
         "0003_decision_withdrawal.sql",
+        "0004_specs.sql",
     ]
     with psycopg.connect(empty_db_url) as conn:
         assert conn.execute("SELECT project FROM tasks").fetchall() == [("default",)]
@@ -292,7 +294,10 @@ def test_legacy_withdrawn_row_survives_check(empty_db_url):
         if name.startswith("0001"):
             with psycopg.connect(empty_db_url, autocommit=True) as conn:
                 legacy = add_decision(conn, add_task(conn), status="withdrawn")
-    assert run_migrations(empty_db_url, PACKAGE) == ["0003_decision_withdrawal.sql"]
+    assert run_migrations(empty_db_url, PACKAGE) == [
+        "0003_decision_withdrawal.sql",
+        "0004_specs.sql",
+    ]
     with psycopg.connect(empty_db_url) as conn:
         row = conn.execute(
             "SELECT status, withdraw_reason, superseded_by, answered_elsewhere FROM decisions"
@@ -300,3 +305,164 @@ def test_legacy_withdrawn_row_survives_check(empty_db_url):
             (legacy,),
         ).fetchone()
         assert row == ("withdrawn", None, None, None)
+
+
+def add_spec(conn, **cols) -> int:
+    values = {"name": "s", "title": "t", "created_by_kind": "user", **cols}
+    names = ", ".join(values)
+    marks = ", ".join(["%s"] * len(values))
+    return conn.execute(
+        f"INSERT INTO specs ({names}) VALUES ({marks}) RETURNING id", tuple(values.values())
+    ).fetchone()[0]
+
+
+def columns(conn, table: str) -> dict[str, str]:
+    """column -> is_nullable of `table`."""
+    return dict(
+        conn.execute(
+            "SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name = %s",
+            (table,),
+        ).fetchall()
+    )
+
+
+def test_specs_schema(conn):
+    assert {"specs", "spec_versions", "spec_comments"} <= {
+        r[0]
+        for r in conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+        )
+    }
+    specs = columns(conn, "specs")
+    for col in (
+        "project",
+        "name",
+        "title",
+        "status",
+        "labels",
+        "assignee_session",
+        "assignee_slug",
+        "created_by_kind",
+        "created_by_session",
+        "created_by_slug",
+        "client_key",
+        "version",
+        "deleted_at",
+        "created_at",
+        "updated_at",
+    ):
+        assert col in specs, col
+    assert "created_by_device" not in specs
+    versions = columns(conn, "spec_versions")
+    for col in (
+        "spec_id",
+        "path",
+        "version",
+        "body",
+        "sha256",
+        "size",
+        "note",
+        "sources",
+        "created_by_kind",
+        "client_key",
+        "created_at",
+    ):
+        assert col in versions, col
+    assert versions["body"] == "YES"
+    comments = columns(conn, "spec_comments")
+    for col in (
+        "spec_id",
+        "path",
+        "version",
+        "anchor",
+        "body",
+        "suggestion",
+        "suggestion_status",
+        "accepted_version",
+        "decided_at",
+        "decided_by_kind",
+        "attachments",
+        "resolved_at",
+        "resolved_by_kind",
+        "created_by_kind",
+        "client_key",
+        "created_at",
+    ):
+        assert col in comments, col
+    assert columns(conn, "tasks")["spec_id"] == "YES"
+    events = columns(conn, "events")
+    assert events["task_id"] == "YES" and events["spec_id"] == "YES"
+    notices = columns(conn, "notices")
+    assert notices["task_id"] == "YES" and notices["spec_id"] == "YES"
+
+
+def test_spec_checks(conn):
+    for bad in (
+        {"name": "Bad"},
+        {"name": "-x"},
+        {"name": "x" * 81},
+        {"title": ""},
+        {"status": "bogus"},
+    ):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            add_spec(conn, **bad)
+    spec = add_spec(conn, name="ok-1")
+    for bad in ("../x.md", "a.txt", "A.md", "a/../b.md"):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute(
+                "INSERT INTO spec_versions (spec_id, path, version, created_by_kind)"
+                " VALUES (%s, %s, 1, 'user')",
+                (spec, bad),
+            )
+
+
+def test_spec_name_unique_until_deleted(conn):
+    first = add_spec(conn, name="n")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        add_spec(conn, name="n")
+    add_spec(conn, name="n", project="b")
+    conn.execute("UPDATE specs SET deleted_at = now() WHERE id = %s", (first,))
+    add_spec(conn, name="n")
+
+
+def test_task_spec_fk_cascades_project_and_nulls_on_delete(conn):
+    spec = add_spec(conn)
+    task = add_task(conn, spec_id=spec)
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        add_task(conn, spec_id=spec, project="b")
+    conn.execute("UPDATE specs SET project = 'b' WHERE id = %s", (spec,))
+    assert conn.execute("SELECT project FROM tasks WHERE id = %s", (task,)).fetchone() == ("b",)
+    conn.execute("DELETE FROM specs WHERE id = %s", (spec,))
+    assert conn.execute("SELECT project, spec_id FROM tasks WHERE id = %s", (task,)).fetchone() == (
+        "b",
+        None,
+    )
+
+
+def test_events_need_exactly_one_of_task_and_spec(conn):
+    task, spec = add_task(conn), add_spec(conn)
+    insert = "INSERT INTO events (task_id, spec_id, actor_kind, kind) VALUES (%s, %s, 'user', 'x')"
+    for bad in ((None, None), (task, spec)):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute(insert, bad)
+    conn.execute(insert, (task, None))
+    conn.execute(insert, (None, spec))
+
+
+def test_notices_spec_reason(conn):
+    task, spec = add_task(conn), add_spec(conn)
+    insert = (
+        "INSERT INTO notices (task_id, spec_id, session_id, reason, status)"
+        " VALUES (%s, %s, 's1', %s, 'pending')"
+    )
+    conn.execute(insert, (None, spec, "spec"))
+    for bad in ((None, None, "spec"), (task, spec, "spec")):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute(insert, bad)
+
+
+def test_migration_is_idempotent(conn):
+    text = (resources.files(PACKAGE) / "migrations" / "0004_specs.sql").read_text()
+    conn.execute(text)
+    conn.execute(text)
+    test_specs_schema(conn)

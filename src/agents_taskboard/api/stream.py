@@ -168,7 +168,7 @@ class TaskChangeHub:
             async with self._pool.connection() as conn:
                 cur = await conn.execute(
                     "SELECT e.id, e.task_id, coalesce(e.project, 'default') FROM events e"
-                    " WHERE e.id > %s ORDER BY e.id LIMIT %s",
+                    " WHERE e.id > %s AND e.task_id IS NOT NULL ORDER BY e.id LIMIT %s",
                     (cursor, BATCH),
                 )
                 rows = await cur.fetchall()

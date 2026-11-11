@@ -2,6 +2,13 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-11 - specs schema and repository (T-116 A1)
+
+- Migration is `0004_specs.sql` (0003 was the decision withdrawal; the base design said 0003). No `created_by_device` columns: the device path is stage 3b. Session columns are `text` like `tasks`, not `uuid` as the base design wrote, so one comparison rule holds everywhere.
+- `events.task_id` and `notices.task_id` are nullable now, with `CHECK (num_nonnulls(task_id, spec_id) = 1)`; the label scanner keeps its `JOIN tasks`, so spec events are skipped there. The stream poll ignores spec events until A5 adds `spec_changed`.
+- A document write locks the spec row, compares `base_version` with the current version (a tombstone counts as a version, so re-creating a removed path sends the tombstone's version), and appends exactly one event. A version written on an `approved` spec sets `review` and bumps `specs.version` (so a PATCH based on the approved view is stale); other document writes touch only `updated_at`. Removing a document that is absent or already removed is `NotFound`.
+- Soft delete detaches tasks explicitly (`spec_detached` task event each); the FK `ON DELETE SET NULL (spec_id)` only covers a hard delete, which no route does.
+
 ## 2026-11-09 - withdraw needs a reason and an outcome (T-102)
 
 `POST .../withdraw` now requires a body: `reason` plus exactly one of `superseded_by` (decision id, any task in the caller's project scope, checked with `get_decision`, not itself) or `answered_elsewhere` (text). Why required: an agent that withdraws a question must say where the answer went, so the user sees no silent disappearance. Bodyless calls get 422 on purpose; no compatibility layer, so the orchestrator plugin must be deployed before this version. Migration 0003 adds the columns and the CHECK `decisions_withdrawn_has_outcome` as NOT VALID: withdrawn rows from before it have no outcome and are never rewritten (writes are guarded on status = 'open'), so validating would force a fake backfill; new rows are still checked. `[IF T-102 Q1=A]` restrict superseded_by to the same task and drop `superseded_by_task_key`; `[IF Q2=B]` backfill a reason and VALIDATE.
