@@ -2,6 +2,11 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-11 - tasks linked to specs, spec counts (T-116 A4)
+
+- `spec` on task create and PATCH: the spec is looked up in the caller's scope first (404 with the unknown-key body), the task takes the spec's project (an explicit other `project` is 422 `project_mismatch`), and `require_target` still checks that project. A PATCH changing `project` without `spec` sets `spec_id = NULL` in the same UPDATE (the composite FK would refuse the move otherwise); only the spec's own move keeps its tasks attached (FK `ON UPDATE CASCADE`). A spec that moves between lookup and write trips the FK, mapped to 422 `project_mismatch` (`tasks.SpecMoved`). Link changes bump the task version and log `spec_set {from, to}`.
+- `GET /projects/summary` is a FULL JOIN of the task counts and the spec counts per project, so a project with specs but no tasks is listed; deleted and archived specs are not counted. `tests/test_api_tasks.py` task shape gained `spec` (the task JSON changed).
+
 ## 2026-11-11 - spec comments, accept and dismiss (T-116 A3)
 
 - Accept is one transaction under the spec row lock: lock the comment, check it has an open suggestion (422 `no_suggestion`, 409 `already_decided`), write the version through `write_version_locked` (a moved document raises `StaleVersion` and the whole transaction rolls back, so the comment stays `open`), then the status-guarded `UPDATE ... WHERE suggestion_status = 'open'`. It logs one event, `suggestion_accepted {path, version, comment_id}`, not a `document_put` plus a second one. The response is `{"version", "comment"}`.

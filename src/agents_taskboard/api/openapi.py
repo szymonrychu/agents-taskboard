@@ -47,7 +47,9 @@ ERRORS = {
     503: "the orchestrator cannot validate the project (upstream_unavailable)",
 }
 
-PROJECT_422 = "invalid request (invalid_request, unknown_project, project_archived)"
+PROJECT_422 = (
+    "invalid request (invalid_request, unknown_project, project_archived, project_mismatch)"
+)
 
 SPEC_ERRORS = {
     403: "forbidden (forbidden, user_only)",
@@ -60,7 +62,7 @@ SPEC_ERRORS = {
 ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/stream"): (403,),
     ("get", "/projects/summary"): (403,),
-    ("post", "/tasks"): (403, 422, 503),
+    ("post", "/tasks"): (403, 404, 422, 503),
     ("get", "/tasks"): (403, 422),
     ("get", "/tasks/{key}"): (403, 404, 422),
     ("patch", "/tasks/{key}"): (403, 404, 412, 422, 503),

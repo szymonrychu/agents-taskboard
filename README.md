@@ -59,19 +59,19 @@ Task keys look like `T-5`. Statuses: `idea`, `open`, `in_progress`, `done`, `dro
 
 ### `GET /taskboard/api/v1/tasks`
 
-List tasks. Query: `status` (`active` default, `done`, `dropped`, `all`), `project`, `session`, `mine` (service listener, the acting session), `waiting` (only tasks with an open decision), `label` (repeatable, any match), `limit` (1..200, default 50), `cursor`. Returns `{"items": [...], "next_cursor": "..."|null}`.
+List tasks. Query: `status` (`active` default, `done`, `dropped`, `all`), `project`, `spec` (tasks linked to that spec, `422` for a malformed key), `session`, `mine` (service listener, the acting session), `waiting` (only tasks with an open decision), `label` (repeatable, any match), `limit` (1..200, default 50), `cursor`. Returns `{"items": [...], "next_cursor": "..."|null}`.
 
 ### `POST /taskboard/api/v1/tasks`
 
-Create an idea or task: `title`, `body`, `kind`, `status`, `labels`, `assignee_session` or `assignee_self` (agents), `client_key`, `project` (default: the agent's one project; `default` for a `*` agent and users). `201` with the task; a repeated `client_key` of the same creator answers `200` with the existing task.
+Create an idea or task: `title`, `body`, `kind`, `status`, `labels`, `assignee_session` or `assignee_self` (agents), `client_key`, `project` (default: the agent's one project; `default` for a `*` agent and users), `spec` (a key `S-n`: the task takes the spec's project; an explicit other `project` is `422 project_mismatch`; a spec outside the scope or deleted is `404 not_found`). `201` with the task; a repeated `client_key` of the same creator answers `200` with the existing task.
 
 ### `GET /taskboard/api/v1/tasks/{key}`
 
-One task with its labels, comments, todo, decisions and history. `404 not_found` for an unknown or malformed key. Optional `events_limit` and `comments_limit` (0..200) return only the newest N events or comments (oldest first); `events_before` and `comments_before` (ids) page back to items with a smaller id. Every task carries `events_total` and `comments_total`. `422 invalid_request` for out-of-range values.
+One task with its labels, linked spec key (`spec`, or null), comments, todo, decisions and history. `404 not_found` for an unknown or malformed key. Optional `events_limit` and `comments_limit` (0..200) return only the newest N events or comments (oldest first); `events_before` and `comments_before` (ids) page back to items with a smaller id. Every task carries `events_total` and `comments_total`. `422 invalid_request` for out-of-range values.
 
 ### `PATCH /taskboard/api/v1/tasks/{key}`
 
-Change `title`, `body`, `status`, `labels`, `project` (a move, logged as `project_changed`), `assignee_session` or `assignee_self`; `version` is required. `412 stale_version` when the task changed, `422 invalid_request` when nothing changes.
+Change `title`, `body`, `status`, `labels`, `project` (a move, logged as `project_changed`; it detaches the task from its spec), `spec` (`S-n` links the task and moves it into the spec's project, `null` unlinks; logged as `spec_set`; `422 project_mismatch` with a different `project`), `assignee_session` or `assignee_self`; `version` is required. `412 stale_version` when the task changed, `422 invalid_request` when nothing changes.
 
 ### `POST /taskboard/api/v1/tasks/{key}/comments`
 
@@ -99,7 +99,7 @@ Answer an open decision as the user: `choice` (option index) or `text`, plus an 
 
 ### `GET /taskboard/api/v1/projects/summary`
 
-Per project in the caller's scope: `[{"project", "open_tasks", "waiting_decisions", "specs": {"draft": 0, "review": 0, "approved": 0}}]`, one grouped query ordered by project. `open_tasks` counts tasks that are not `done` or `dropped`; `waiting_decisions` counts open decisions; the spec counts are zero until specs exist. Optional `project` narrows it to one project. A relay caller sees only its own project (all with `X-Orch-Projects: *`); web and delegate callers see every project. Served on all three listeners.
+Per project in the caller's scope: `[{"project", "open_tasks", "waiting_decisions", "specs": {"draft": 0, "review": 0, "approved": 0}}]`, one grouped query ordered by project. `open_tasks` counts tasks that are not `done` or `dropped`; `waiting_decisions` counts open decisions; `specs` counts live specs by status (deleted and archived ones are not counted), and a project with only specs is listed too. Optional `project` narrows it to one project. A relay caller sees only its own project (all with `X-Orch-Projects: *`); web and delegate callers see every project. Served on all three listeners.
 
 Specs (base design 3.5): a spec `S-<n>` is a named bundle of markdown documents in one project, with status `draft`, `review`, `approved` (set by the user only) or `archived`. Each document (`path` like `plan.md` or `research/topic.md`: `^[a-z0-9][a-z0-9._/-]{0,119}\.md$`, no `..`) has a linear, immutable version history. A write names the version it edited (`base_version`, `0` for a new document); when another write came first it answers `412 stale_version` with `current_version` in the error object, and nothing is written. Caps: document body 192 KiB of UTF-8, 50 documents per spec (`413 payload_too_large`); version `note` up to 500 characters, at most 20 `sources` (opaque refs, `422`). A version written on an `approved` spec returns it to `review`. Spec names are unique per project among live specs; a deleted spec frees its name, answers `404` on every route, and its tasks are detached. Every write appends one event and is announced on the stream.
 
@@ -165,7 +165,7 @@ Server-sent events (web listener only): `task_changed` with data `{"key": "T-5",
 
 ### Errors
 
-Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open`, `name_taken`, `already_resolved` and `already_decided` (409), `stale_version` (412, on a document with `current_version`), `payload_too_large` (413), `invalid_request`, `no_suggestion`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
+Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open`, `name_taken`, `already_resolved` and `already_decided` (409), `stale_version` (412, on a document with `current_version`), `payload_too_large` (413), `invalid_request`, `no_suggestion`, `project_mismatch`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
 
 ## Notices
 

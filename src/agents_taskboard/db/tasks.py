@@ -16,14 +16,19 @@ from psycopg.rows import dict_row
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.db.events import append_event, notify_changed
 from agents_taskboard.db.scope import scoped
+from agents_taskboard.db.specs import spec_key
 
 ACTIVE = ("idea", "open", "in_progress")
 _KEY = re.compile(r"T-([1-9][0-9]{0,17})")
-PATCH_FIELDS = ("title", "body", "status", "labels", "assignee_session", "project")
+PATCH_FIELDS = ("title", "body", "status", "labels", "assignee_session", "project", "spec_id")
 
 
 class NotFound(Exception):
     pass
+
+
+class SpecMoved(Exception):
+    """The spec named for the task changed project after it was looked up."""
 
 
 class StaleVersion(Exception):
@@ -44,6 +49,7 @@ class NewTask:
     assignee_session: str | None
     client_key: str | None
     project: str
+    spec_id: int | None = None
 
 
 def parse_key(key: str) -> int | None:
@@ -57,6 +63,16 @@ def task_key(task_id: int) -> str:
 
 def task_url(public_url: str, key: str) -> str:
     return f"{public_url}/tasks/{key}"
+
+
+async def _guard_spec(conn: psycopg.AsyncConnection, query: Any, params: tuple) -> Any:
+    """Run a statement that sets `spec_id`; the composite FK (spec_id, project) fails when the
+    spec moved project in between, which is SpecMoved."""
+    try:
+        async with conn.transaction():
+            return await conn.execute(query, params)
+    except psycopg.errors.ForeignKeyViolation:
+        raise SpecMoved from None
 
 
 async def create_task(
@@ -75,10 +91,11 @@ async def create_task(
             existing = await cur.fetchone()
             if existing:
                 return existing[0], False
-        cur = await conn.execute(
+        cur = await _guard_spec(
+            conn,
             "INSERT INTO tasks (title, body, kind, status, labels, assignee_session,"
-            " created_by_kind, created_by_session, created_by_slug, client_key, project)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " created_by_kind, created_by_session, created_by_slug, client_key, project, spec_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT DO NOTHING RETURNING id",
             (
                 new.title,
@@ -92,6 +109,7 @@ async def create_task(
                 actor.slug,
                 new.client_key,
                 new.project,
+                new.spec_id,
             ),
         )
         row = await cur.fetchone()
@@ -125,7 +143,7 @@ async def patch_task(
     scope, scope_params = scoped(actor)
     async with conn.transaction():
         cur = await conn.cursor(row_factory=dict_row).execute(
-            "SELECT version, title, body, status, labels, assignee_session, project"
+            "SELECT version, title, body, status, labels, assignee_session, project, spec_id"
             f" FROM tasks t WHERE t.id = %s{scope} FOR UPDATE",
             (task_id, *scope_params),
         )
@@ -135,10 +153,14 @@ async def patch_task(
         if row["version"] != version:
             raise StaleVersion
         changed = {k: v for k, v in changes.items() if row[k] != v}
+        if "project" in changed and "spec_id" not in changes and row["spec_id"] is not None:
+            # a move leaves the spec; only the spec's own move (FK cascade) keeps the link
+            changed["spec_id"] = None
         if not changed:
             return False
         assignments = [sql.SQL("{} = %s").format(sql.Identifier(k)) for k in changed]
-        cur = await conn.execute(
+        cur = await _guard_spec(
+            conn,
             sql.SQL(
                 "UPDATE tasks SET {}, version = version + 1, updated_at = now()"
                 " WHERE id = %s AND version = %s RETURNING id"
@@ -150,6 +172,17 @@ async def patch_task(
         plain = [k for k in ("title", "body", "assignee_session") if k in changed]
         if plain:
             await append_event(conn, task_id, actor, "updated", {"fields": plain})
+        if "spec_id" in changed:
+            await append_event(
+                conn,
+                task_id,
+                actor,
+                "spec_set",
+                {
+                    "from": None if row["spec_id"] is None else spec_key(row["spec_id"]),
+                    "to": None if changed["spec_id"] is None else spec_key(changed["spec_id"]),
+                },
+            )
         if "project" in changed:
             await append_event(
                 conn,
@@ -231,6 +264,7 @@ async def list_task_ids(
     session: str | None = None,
     waiting: bool | None = None,
     labels: list[str] | None = None,
+    spec_id: int | None = None,
     limit: int = 50,
     cursor: str | None = None,
 ) -> tuple[list[int], str | None]:
@@ -270,6 +304,9 @@ async def list_task_ids(
     if labels:
         where.append("t.labels && %s::text[]")
         params.append(labels)
+    if spec_id is not None:
+        where.append("t.spec_id = %s")
+        params.append(spec_id)
     outer = ""
     if cursor is not None:
         blocked, last_id = decode_cursor(cursor)
@@ -344,8 +381,8 @@ async def load_tasks(
         r["id"]: r
         for r in await _rows(
             conn,
-            "SELECT id, project, title, body, kind, status, labels, assignee_session, version,"
-            f" created_at, updated_at FROM tasks t WHERE id = ANY(%s){scope}",
+            "SELECT id, project, spec_id, title, body, kind, status, labels, assignee_session,"
+            f" version, created_at, updated_at FROM tasks t WHERE id = ANY(%s){scope}",
             ids,
             tuple(scope_params),
         )
@@ -415,10 +452,12 @@ async def load_tasks(
                 waiting.setdefault(d["asking_session"], d["asking_slug"])
         key = task_key(task_id)
         task.pop("id")
+        spec_id = task.pop("spec_id")
         out.append(
             {
                 "key": key,
                 **task,
+                "spec": None if spec_id is None else spec_key(spec_id),
                 "blocked": open_count > 0,
                 "open_decisions": open_count,
                 "waiting_sessions": [

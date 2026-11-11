@@ -627,6 +627,18 @@
             ],
             "title": "Project"
           },
+          "spec": {
+            "anyOf": [
+              {
+                "pattern": "^S-[1-9][0-9]{0,17}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec"
+          },
           "status": {
             "anyOf": [
               {
@@ -713,6 +725,18 @@
               }
             ],
             "title": "Project"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "pattern": "^S-[1-9][0-9]{0,17}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec"
           },
           "status": {
             "anyOf": [
@@ -1140,7 +1164,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, unknown_project, project_archived)"
+            "description": "invalid request (invalid_request, unknown_project, project_archived, project_mismatch)"
           },
           "503": {
             "content": {
@@ -1330,7 +1354,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, unknown_project, project_archived)"
+            "description": "invalid request (invalid_request, unknown_project, project_archived, project_mismatch)"
           },
           "503": {
             "content": {
@@ -2275,6 +2299,22 @@
           },
           {
             "in": "query",
+            "name": "spec",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spec"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -2373,6 +2413,16 @@
             },
             "description": "source address is not allowed (forbidden)"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such task, decision or todo item (not_found)"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2381,7 +2431,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, unknown_project, project_archived)"
+            "description": "invalid request (invalid_request, unknown_project, project_archived, project_mismatch)"
           },
           "503": {
             "content": {
@@ -2601,7 +2651,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, unknown_project, project_archived)"
+            "description": "invalid request (invalid_request, unknown_project, project_archived, project_mismatch)"
           },
           "503": {
             "content": {

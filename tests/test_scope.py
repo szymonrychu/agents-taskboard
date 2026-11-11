@@ -390,3 +390,13 @@ async def test_spec_lists_never_cross_projects(service_client):
     for caller, expected in (("a", ["a"]), ("b", ["b"]), ("*", ["a", "b"])):
         r = await service_client.get(SPECS, headers=scope(caller))
         assert sorted(s["project"] for s in r.json()["items"]) == expected
+
+
+async def test_task_list_by_spec_never_crosses_projects(service_client):
+    key = (await make_spec(service_client, "a"))["key"]
+    r = await service_client.post(TASKS, json={"title": "t", "spec": key}, headers=scope("a"))
+    assert r.status_code == 201, r.text
+    for caller, expected in (("a", 1), ("b", 0), ("*", 1)):
+        r = await service_client.get(TASKS, params={"spec": key}, headers=scope(caller))
+        assert r.status_code == 200
+        assert len(r.json()["items"]) == expected, caller

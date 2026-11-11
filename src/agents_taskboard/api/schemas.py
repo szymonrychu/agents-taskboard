@@ -14,6 +14,7 @@ ListStatus = Literal["active", "done", "dropped", "all"]
 
 Title = Field(min_length=1, max_length=200)
 ProjectSlug = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,39}$")
+SpecKey = Field(default=None, pattern=r"^S-[1-9][0-9]{0,17}$")
 
 
 class _Strict(BaseModel):
@@ -43,6 +44,7 @@ class TaskCreate(_Labelled):
     assignee_self: bool = False
     client_key: str | None = Field(default=None, min_length=1, max_length=200)
     project: str | None = ProjectSlug
+    spec: str | None = SpecKey
 
 
 class TaskPatch(_Labelled):
@@ -54,6 +56,7 @@ class TaskPatch(_Labelled):
     assignee_session: str | None = None
     assignee_self: bool = False
     project: str | None = ProjectSlug
+    spec: str | None = SpecKey
 
 
 class CommentCreate(_Strict):

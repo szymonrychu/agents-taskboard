@@ -59,3 +59,34 @@ async def test_summary_relay_caller_sees_own_project_only(service_client, conn):
         SUMMARY, headers={k: v for k, v in agent().items() if k != "X-Orch-Projects"}
     )
     assert r.status_code == 400
+
+
+SPECS = f"{PREFIX}/specs"
+
+
+async def test_summary_spec_counts(web_client, service_client):
+    keys = []
+    for name in ("draft", "review", "approved", "archived", "deleted"):
+        r = await service_client.post(
+            SPECS, json={"name": name, "title": "t", "project": "a"}, headers=agent(projects="a")
+        )
+        keys.append(r.json()["key"])
+    for key, status in zip(keys[1:4], ("review", "approved", "archived"), strict=True):
+        r = await web_client.patch(f"{SPECS}/{key}", json={"version": 1, "status": status})
+        assert r.status_code == 200, r.text
+    assert (await web_client.delete(f"{SPECS}/{keys[4]}")).status_code == 204
+    await service_client.post(
+        SPECS, json={"name": "x", "title": "t", "project": "b"}, headers=agent(projects="b")
+    )
+    rows = by_project((await web_client.get(SUMMARY)).json())
+    assert rows["a"] == {
+        "project": "a",
+        "open_tasks": 0,
+        "waiting_decisions": 0,
+        "specs": {"draft": 1, "review": 1, "approved": 1},
+    }
+    assert rows["b"]["specs"] == {"draft": 1, "review": 0, "approved": 0}
+    r = await service_client.get(SUMMARY, headers=agent(projects="b"))
+    assert [x["project"] for x in r.json()] == ["b"]
+    r = await web_client.get(SUMMARY, params={"project": "a"})
+    assert [x["project"] for x in r.json()] == ["a"]
