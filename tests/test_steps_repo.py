@@ -526,3 +526,81 @@ async def test_task_leaving_spec_loses_step_and_deps(pool, conn):
         "SELECT spec_id, step FROM tasks WHERE id = %s", (task_id(keys[1]),)
     ).fetchone() == (None, None)
     assert conn.execute("SELECT count(*) FROM task_deps").fetchone() == (0,)
+
+
+async def test_middle_step_leaving_spec_renumbers_and_bumps(pool, conn):
+    sid = await make_spec(pool)
+    keys = await set_steps(pool, sid, steps_of(1, 2, 3), 0)
+    async with pool.connection() as c:
+        assert await tasks_repo.patch_task(c, USER, task_id(keys[1]), 1, {"spec_id": None})
+    items, version = await listed(pool, sid)
+    assert [(i["key"], i["step"]) for i in items] == [(keys[0], 1), (keys[2], 2)]
+    assert version == 2
+    assert conn.execute(
+        "SELECT kind, detail->>'key' FROM events WHERE spec_id = %s AND task_id IS NULL"
+        " ORDER BY id DESC LIMIT 1",
+        (sid,),
+    ).fetchone() == ("step_removed", keys[1])
+    # a bulk push of the remaining steps keeps them instead of creating a duplicate
+    assert await set_steps(pool, sid, steps_of(1, 2), version) == [keys[0], keys[2]]
+    assert conn.execute("SELECT count(*) FROM tasks WHERE spec_id = %s", (sid,)).fetchone() == (2,)
+
+
+async def test_step_moving_project_renumbers(pool, conn):
+    sid = await make_spec(pool)
+    keys = await set_steps(pool, sid, steps_of(1, 2, 3), 0)
+    async with pool.connection() as c:
+        assert await tasks_repo.patch_task(c, USER, task_id(keys[0]), 1, {"project": "b"})
+    items, version = await listed(pool, sid)
+    assert [(i["key"], i["step"]) for i in items] == [(keys[1], 1), (keys[2], 2)]
+    assert version == 2
+
+
+async def test_set_deps_bumps_steps_version(pool):
+    sid = await make_spec(pool)
+    keys = await set_steps(pool, sid, steps_of(1, 2), 0)
+    async with pool.connection() as c:
+        await repo.set_deps(c, AGENT, task_id(keys[1]), [task_id(keys[0])])
+    assert (await listed(pool, sid))[1] == 2
+    async with pool.connection() as c:
+        await repo.set_deps(c, AGENT, task_id(keys[1]), [task_id(keys[0])])
+    assert (await listed(pool, sid))[1] == 2
+
+
+async def test_claim_waits_for_a_step_set_write(pool):
+    sid = await make_spec(pool)
+    keys = await set_steps(pool, sid, steps_of(1, 2), 0)
+    async with pool.connection() as holder, holder.transaction():
+        # what set_steps holds: the spec row and every step row
+        await holder.execute("SELECT 1 FROM specs WHERE id = %s FOR UPDATE", (sid,))
+        await holder.execute("SELECT 1 FROM tasks WHERE spec_id = %s FOR UPDATE", (sid,))
+        claim = asyncio.create_task(next_step(pool, sid, True))
+        await asyncio.sleep(0.3)
+        assert not claim.done()
+    claimed = await claim
+    assert claimed is not None and claimed["key"] == keys[0]
+
+
+async def test_claim_skips_a_locked_step(pool):
+    sid = await make_spec(pool)
+    keys = await set_steps(pool, sid, steps_of(1, 2), 0)
+    async with pool.connection() as holder, holder.transaction():
+        await holder.execute("SELECT 1 FROM tasks WHERE id = %s FOR UPDATE", (task_id(keys[0]),))
+        claimed = await asyncio.wait_for(next_step(pool, sid, True), 5)
+    assert claimed["key"] == keys[1]
+
+
+async def test_racing_step_sets_one_wins(pool, conn):
+    sid = await make_spec(pool)
+    results = await asyncio.gather(
+        set_steps(pool, sid, steps_of(1, 2), 0),
+        set_steps(pool, sid, steps_of(1, 2, 3), 0, AGENT_2),
+        return_exceptions=True,
+    )
+    stale = [r for r in results if isinstance(r, repo.StaleVersion)]
+    won = [r for r in results if isinstance(r, list)]
+    assert len(stale) == 1 and len(won) == 1
+    assert conn.execute("SELECT count(*) FROM tasks WHERE spec_id = %s", (sid,)).fetchone() == (
+        len(won[0]),
+    )
+    assert (await listed(pool, sid))[1] == 1

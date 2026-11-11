@@ -102,7 +102,9 @@ def build_steps_router(actor_dep: Callable[..., Actor]) -> APIRouter:
         spec_id = spec_id_of(key)
         steps = []
         for item in body.steps:
-            step = item.model_dump(include={"n", "title", "body", "depends_on", "model"})
+            step = item.model_dump(include={"n", "title", "body", "depends_on"})
+            if "model" in item.model_fields_set:  # absent keeps the model, null clears it
+                step["model"] = item.model
             for optional in ("labels", "todo"):
                 value = getattr(item, optional)
                 if value is not None:

@@ -160,6 +160,17 @@ async def create_task(
         return task_id, True
 
 
+async def _lock_plan_of(conn: psycopg.AsyncConnection, task_id: int) -> None:
+    """Row-lock the spec of a numbered step before the step itself: spec then steps is the lock
+    order of every step-set write, and a step leaving the spec renumbers the others."""
+    cur = await conn.execute(
+        "SELECT spec_id FROM tasks WHERE id = %s AND step IS NOT NULL", (task_id,)
+    )
+    row = await cur.fetchone()
+    if row is not None:
+        await conn.execute("SELECT 1 FROM specs WHERE id = %s FOR UPDATE", (row[0],))
+
+
 async def patch_task(
     conn: psycopg.AsyncConnection,
     actor: Actor,
@@ -172,6 +183,8 @@ async def patch_task(
     (also outside the actor's projects) or StaleVersion."""
     scope, scope_params = scoped(actor)
     async with conn.transaction():
+        if "spec_id" in changes or "project" in changes:
+            await _lock_plan_of(conn, task_id)
         cur = await conn.cursor(row_factory=dict_row).execute(
             "SELECT version, title, body, status, labels, assignee_session, project, spec_id,"
             f" step, refs, model FROM tasks t WHERE t.id = %s{scope} FOR UPDATE",
@@ -215,6 +228,10 @@ async def patch_task(
             await append_event(conn, task_id, actor, "updated", {"fields": plain})
         if left_plan:
             await append_event(conn, task_id, actor, "step_removed", {"step": row["step"]})
+            # imported here: the steps repository builds on this module
+            from agents_taskboard.db.steps import close_gap
+
+            await close_gap(conn, actor, row["spec_id"], task_id, row["step"])
         if "spec_id" in changed:
             await append_event(
                 conn,

@@ -3,13 +3,15 @@
 `section`, the second heading with the same slug gets `-2`, the third `-3`.
 
 A section is its heading line and everything up to the next heading of the same or a higher
-level. ATX (`#`) and setext (`===`, `---` under a paragraph line) headings count; lines inside
-fenced code blocks do not. The heading text is reduced to what the web renders for links and
-images (their label), so the slug matches the rendered anchor.
+level. ATX (`#`) and setext (`===`, `---` under a paragraph of one or more lines) headings
+count; lines inside fenced code blocks do not. The heading text is reduced to what the web
+renders for links and images (their label) and entities, so the slug matches the rendered
+anchor.
 """
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
 
@@ -32,7 +34,7 @@ def slug(text: str, seen: dict[str, int]) -> str:
 
 
 def _plain(text: str) -> str:
-    return _LINK.sub(r"\1", text)
+    return html.unescape(_LINK.sub(r"\1", text))
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,7 @@ def _headings(lines: list[str]) -> list[_Heading]:
     out: list[_Heading] = []
     fence: str | None = None
     previous_paragraph = False
+    paragraph_start = 0
     for index, raw in enumerate(lines):
         line = raw.rstrip("\r\n")
         opened = _FENCE.match(line)
@@ -72,12 +75,15 @@ def _headings(lines: list[str]) -> list[_Heading]:
             continue
         underline = _SETEXT.match(line)
         if underline and previous_paragraph:
-            text = lines[index - 1].strip()
+            text = " ".join(raw.strip() for raw in lines[paragraph_start:index])
             level = 1 if underline.group(1)[0] == "=" else 2
-            out.append(_Heading(slug(_plain(text), seen), level, index - 1))
+            out.append(_Heading(slug(_plain(text), seen), level, paragraph_start))
             previous_paragraph = False
             continue
-        previous_paragraph = bool(line.strip()) and not _NOT_BLOCK.match(line)
+        in_paragraph = bool(line.strip()) and not _NOT_BLOCK.match(line)
+        if in_paragraph and not previous_paragraph:
+            paragraph_start = index
+        previous_paragraph = in_paragraph
     return out
 
 

@@ -363,9 +363,10 @@ async def _update_step(
     """Apply the title, body, model, labels and todo of `item` to an existing step; returns
     whether anything changed."""
     task_id = row["id"]
-    wanted = {"title": item["title"], "body": item["body"], "model": item.get("model")}
-    if "labels" in item:
-        wanted["labels"] = item["labels"]
+    wanted = {"title": item["title"], "body": item["body"]}
+    for optional in ("model", "labels"):  # absent keeps the current value
+        if optional in item:
+            wanted[optional] = item[optional]
     changed = {k: v for k, v in wanted.items() if row[k] != v}
     if changed:
         sets = ", ".join(f"{k} = %s" for k in changed)
@@ -475,6 +476,29 @@ async def _renumber(
         )
         await notify_changed(conn, row["id"])
     return moved
+
+
+async def close_gap(
+    conn: psycopg.AsyncConnection, actor: Actor, spec_id: int, task_id: int, step: int
+) -> None:
+    """Step `step` (task `task_id`) just left the spec through a task patch: renumber the
+    remaining steps densely, bump `steps_version`, log and notify. The caller holds the spec
+    row lock."""
+    cur = await conn.cursor(row_factory=dict_row).execute(
+        "SELECT id, step FROM tasks WHERE spec_id = %s AND step IS NOT NULL"
+        " ORDER BY step, id FOR UPDATE",
+        (spec_id,),
+    )
+    await _renumber(conn, actor, await cur.fetchall())
+    version = await _bump(conn, spec_id)
+    await append_spec_event(
+        conn,
+        spec_id,
+        actor,
+        "step_removed",
+        {"steps_version": version, "key": task_key(task_id), "step": step},
+    )
+    await notify_spec_changed(conn, spec_id)
 
 
 async def _drop_step(conn: psycopg.AsyncConnection, actor: Actor, row: dict[str, Any]) -> None:
@@ -690,9 +714,15 @@ async def set_deps(
         )
         if task_id not in wanted and (await cur.fetchone())[0] != len(wanted):
             raise InvalidRequest("depends_on names steps of the same spec")
-        if await _replace_deps(conn, actor, task_id, wanted):
-            await conn.execute("UPDATE tasks SET updated_at = now() WHERE id = %s", (task_id,))
+        if not await _replace_deps(conn, actor, task_id, wanted):
+            return
+        await conn.execute("UPDATE tasks SET updated_at = now() WHERE id = %s", (task_id,))
         await _refuse_cycle(conn, spec_id)
+        version = await _bump(conn, spec_id)
+        await append_spec_event(
+            conn, spec_id, actor, "deps_set", {"steps_version": version, "key": task_key(task_id)}
+        )
+        await notify_spec_changed(conn, spec_id)
 
 
 async def next_step(
@@ -702,9 +732,12 @@ async def next_step(
     it goes `in_progress` in one guarded update; the candidate row is taken with
     `FOR UPDATE SKIP LOCKED`, so concurrent claims get different steps. Raises NotFound."""
     scope, params = scoped(actor, "s.project")
+    # a claim share-locks the spec: it waits for a step-set write (which holds the spec and every
+    # step row) instead of skipping all its rows and answering "none ready"
+    share = " FOR SHARE" if claim else ""
     async with conn.transaction():
         cur = await conn.execute(
-            f"SELECT 1 FROM specs s WHERE s.id = %s AND s.deleted_at IS NULL{scope}",
+            f"SELECT 1 FROM specs s WHERE s.id = %s AND s.deleted_at IS NULL{scope}{share}",
             (spec_id, *params),
         )
         if await cur.fetchone() is None:

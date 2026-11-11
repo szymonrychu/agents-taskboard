@@ -572,3 +572,27 @@ async def test_web_user_edits_steps(web_client, service_client):
     assert r.status_code == 200
     r = await web_client.get(f"{SPECS}/{key}/steps")
     assert r.json()["steps_version"] == 2
+
+
+async def test_steps_put_keeps_model_when_absent(service_client):
+    key = await make_spec(service_client)
+    (k1,) = await seed_steps(service_client, key, [step(1, model="opus", labels=["impl"])])
+    r = await put_steps(service_client, key, [step(1, title="renamed")], 1)
+    assert r.status_code == 200, r.text
+    task = (await service_client.get(f"{TASKS}/{k1}", headers=agent())).json()
+    assert (task["title"], task["model"], task["labels"]) == ("renamed", "opus", ["impl"])
+    r = await put_steps(service_client, key, [step(1, title="renamed", model=None)], 2)
+    assert r.status_code == 200, r.text
+    task = (await service_client.get(f"{TASKS}/{k1}", headers=agent())).json()
+    assert task["model"] is None
+
+
+def test_section_multiline_setext_and_entities():
+    from agents_taskboard.sections import find_section
+
+    doc = "intro\n\nFirst line\nsecond line\n===\nbody\n\n## A &amp; B\nx\n"
+    assert find_section(doc, "first-line-second-line") == (
+        "First line\nsecond line\n===\nbody\n\n## A &amp; B\nx\n",
+        False,
+    )
+    assert find_section(doc, "a-b") == ("## A &amp; B\nx\n", False)
