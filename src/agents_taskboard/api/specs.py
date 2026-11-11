@@ -11,12 +11,21 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.api.errors import ApiError
 from agents_taskboard.api.schemas import (
+    CommentList,
+    DocumentBody,
+    DocumentList,
     DocumentPut,
+    DocumentVersion,
+    SpecComment,
     SpecCommentCreate,
     SpecCreate,
+    SpecDetail,
+    SpecPage,
     SpecPatch,
     SpecStatus,
     SuggestionAccept,
+    SuggestionAccepted,
+    VersionPage,
 )
 from agents_taskboard.api.tasks import MAX_LIMIT, pool_of, public_url, require_target
 from agents_taskboard.db import specs as repo
@@ -82,7 +91,7 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
     router = APIRouter()
     ActorDep = Annotated[Actor, Depends(actor_dep)]
 
-    @router.get("/specs")
+    @router.get("/specs", response_model=SpecPage)
     async def list_specs(
         request: Request,
         actor: ActorDep,
@@ -114,7 +123,7 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
             item["url"] = spec_url(public, item["key"])
         return {"items": items, "next_cursor": next_cursor}
 
-    @router.post("/specs", status_code=201)
+    @router.post("/specs", status_code=201, response_model=SpecDetail)
     async def create_spec(
         body: SpecCreate, request: Request, response: Response, actor: ActorDep
     ) -> dict[str, Any]:
@@ -136,11 +145,11 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
             response.status_code = 200
         return await load_spec(request, actor, spec["key"])
 
-    @router.get("/specs/{key}")
+    @router.get("/specs/{key}", response_model=SpecDetail)
     async def get_spec(key: str, request: Request, actor: ActorDep) -> dict[str, Any]:
         return await load_spec(request, actor, key)
 
-    @router.patch("/specs/{key}")
+    @router.patch("/specs/{key}", response_model=SpecDetail)
     async def patch_spec(
         key: str, body: SpecPatch, request: Request, actor: ActorDep
     ) -> dict[str, Any]:
@@ -190,14 +199,14 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
             """Agents never delete: the relay answers like an unknown route (404), not 405."""
             raise ApiError(404, "not_found", "Not Found")
 
-    @router.get("/specs/{key}/docs")
+    @router.get("/specs/{key}/docs", response_model=DocumentList)
     async def list_documents(key: str, request: Request, actor: ActorDep) -> dict[str, Any]:
         spec = await load_spec(request, actor, key)
         async with pool_of(request).connection() as conn:
             items = await repo.list_documents(conn, spec_id_of(spec["key"]))
         return {"items": items}
 
-    @router.get("/specs/{key}/docs/{path:path}/versions")
+    @router.get("/specs/{key}/docs/{path:path}/versions", response_model=VersionPage)
     async def list_versions(
         key: str,
         path: str,
@@ -217,6 +226,7 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
 
     @router.get(
         "/specs/{key}/docs/{path:path}",
+        response_model=DocumentBody,
         responses={
             200: {"content": {MARKDOWN: {"schema": {"type": "string"}}}},
             304: {"description": "Not modified (If-None-Match matched the ETag)"},
@@ -244,7 +254,7 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
             return Response(status_code=304, headers=headers)
         return Response(doc["body"], media_type=f"{MARKDOWN}; charset=utf-8", headers=headers)
 
-    @router.put("/specs/{key}/docs/{path:path}", status_code=201)
+    @router.put("/specs/{key}/docs/{path:path}", status_code=201, response_model=DocumentVersion)
     async def put_document(
         key: str,
         path: str,
@@ -271,7 +281,7 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
             response.status_code = 200
         return version
 
-    @router.get("/specs/{key}/comments")
+    @router.get("/specs/{key}/comments", response_model=CommentList)
     async def list_comments(
         key: str,
         request: Request,
@@ -284,7 +294,7 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
             items = await repo.list_comments(conn, spec_id_of(spec["key"]), path, open)
         return {"items": items}
 
-    @router.post("/specs/{key}/comments", status_code=201)
+    @router.post("/specs/{key}/comments", status_code=201, response_model=SpecComment)
     async def add_comment(
         key: str,
         body: SpecCommentCreate,
@@ -311,7 +321,7 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
             response.status_code = 200
         return comment
 
-    @router.post("/specs/{key}/comments/{comment_id}/resolve")
+    @router.post("/specs/{key}/comments/{comment_id}/resolve", response_model=SpecComment)
     async def resolve_comment(
         key: str, comment_id: int, request: Request, actor: ActorDep
     ) -> dict[str, Any]:
@@ -322,7 +332,11 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
 
     if user_routes:
 
-        @router.post("/specs/{key}/comments/{comment_id}/accept", status_code=201)
+        @router.post(
+            "/specs/{key}/comments/{comment_id}/accept",
+            status_code=201,
+            response_model=SuggestionAccepted,
+        )
         async def accept_suggestion(
             key: str, comment_id: int, body: SuggestionAccept, request: Request, actor: ActorDep
         ) -> dict[str, Any]:
@@ -337,7 +351,7 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
                     )
             return {"version": version, "comment": comment}
 
-        @router.post("/specs/{key}/comments/{comment_id}/dismiss")
+        @router.post("/specs/{key}/comments/{comment_id}/dismiss", response_model=SpecComment)
         async def dismiss_suggestion(
             key: str, comment_id: int, request: Request, actor: ActorDep
         ) -> dict[str, Any]:

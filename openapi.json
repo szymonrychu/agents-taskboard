@@ -1,6 +1,44 @@
 {
   "components": {
     "schemas": {
+      "ActorRef": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "slug"
+        ],
+        "title": "ActorRef",
+        "type": "object"
+      },
       "CommentCreate": {
         "additionalProperties": false,
         "properties": {
@@ -14,6 +52,23 @@
           "body"
         ],
         "title": "CommentCreate",
+        "type": "object"
+      },
+      "CommentList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SpecComment"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "CommentList",
         "type": "object"
       },
       "DecisionAnswer": {
@@ -175,6 +230,128 @@
         "title": "DecisionWithdraw",
         "type": "object"
       },
+      "DocumentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_by_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Kind"
+          },
+          "created_by_session": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Session"
+          },
+          "created_by_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Slug"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "sources": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "version",
+          "sha256",
+          "size",
+          "note",
+          "sources",
+          "created_by",
+          "created_at",
+          "created_by_kind",
+          "created_by_session",
+          "created_by_slug",
+          "body"
+        ],
+        "title": "DocumentBody",
+        "type": "object"
+      },
       "DocumentIn": {
         "additionalProperties": false,
         "properties": {
@@ -216,6 +393,23 @@
           "body"
         ],
         "title": "DocumentIn",
+        "type": "object"
+      },
+      "DocumentList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentVersion"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "DocumentList",
         "type": "object"
       },
       "DocumentPut": {
@@ -280,6 +474,247 @@
         "title": "DocumentPut",
         "type": "object"
       },
+      "DocumentVersion": {
+        "additionalProperties": false,
+        "description": "One stored version of a document, without its body. A removal has no hash or size.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_by_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Kind"
+          },
+          "created_by_session": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Session"
+          },
+          "created_by_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Slug"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "sources": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "version",
+          "sha256",
+          "size",
+          "note",
+          "sources",
+          "created_by",
+          "created_at",
+          "created_by_kind",
+          "created_by_session",
+          "created_by_slug"
+        ],
+        "title": "DocumentVersion",
+        "type": "object"
+      },
+      "DocumentVersionListed": {
+        "additionalProperties": false,
+        "description": "A version in a history listing; `removed` is true for a removal.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_by_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Kind"
+          },
+          "created_by_session": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Session"
+          },
+          "created_by_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Slug"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "removed": {
+            "title": "Removed",
+            "type": "boolean"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "sources": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "version",
+          "sha256",
+          "size",
+          "note",
+          "sources",
+          "created_by",
+          "created_at",
+          "created_by_kind",
+          "created_by_session",
+          "created_by_slug",
+          "removed"
+        ],
+        "title": "DocumentVersionListed",
+        "type": "object"
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -308,6 +743,176 @@
           "error"
         ],
         "title": "ErrorResponse",
+        "type": "object"
+      },
+      "SpecComment": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Version"
+          },
+          "anchor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor"
+          },
+          "attachments": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion"
+          },
+          "suggestion_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "open",
+                  "accepted",
+                  "dismissed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion Status"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "version",
+          "anchor",
+          "body",
+          "suggestion",
+          "suggestion_status",
+          "accepted_version",
+          "decided_at",
+          "decided_by",
+          "attachments",
+          "resolved_at",
+          "resolved_by",
+          "created_by",
+          "created_at"
+        ],
+        "title": "SpecComment",
         "type": "object"
       },
       "SpecCommentCreate": {
@@ -460,6 +1065,222 @@
         "title": "SpecCreate",
         "type": "object"
       },
+      "SpecDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee_session": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Session"
+          },
+          "assignee_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Slug"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/SpecDocument"
+            },
+            "title": "Documents",
+            "type": "array"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "open_comments": {
+            "title": "Open Comments",
+            "type": "integer"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "review",
+              "approved",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tasks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "project",
+          "name",
+          "title",
+          "status",
+          "labels",
+          "assignee_session",
+          "assignee_slug",
+          "created_by",
+          "version",
+          "created_at",
+          "updated_at",
+          "url",
+          "documents",
+          "tasks",
+          "open_comments"
+        ],
+        "title": "SpecDetail",
+        "type": "object"
+      },
+      "SpecDocument": {
+        "additionalProperties": false,
+        "description": "A live document inside a single spec.",
+        "properties": {
+          "created_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "version",
+          "size",
+          "sha256",
+          "created_by",
+          "updated_at"
+        ],
+        "title": "SpecDocument",
+        "type": "object"
+      },
+      "SpecPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SpecSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "SpecPage",
+        "type": "object"
+      },
       "SpecPatch": {
         "additionalProperties": false,
         "properties": {
@@ -546,6 +1367,111 @@
         "title": "SpecPatch",
         "type": "object"
       },
+      "SpecSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee_session": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Session"
+          },
+          "assignee_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Slug"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "review",
+              "approved",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "project",
+          "name",
+          "title",
+          "status",
+          "labels",
+          "assignee_session",
+          "assignee_slug",
+          "created_by",
+          "version",
+          "created_at",
+          "updated_at",
+          "url"
+        ],
+        "title": "SpecSummary",
+        "type": "object"
+      },
       "SuggestionAccept": {
         "additionalProperties": false,
         "properties": {
@@ -559,6 +1485,23 @@
           "version"
         ],
         "title": "SuggestionAccept",
+        "type": "object"
+      },
+      "SuggestionAccepted": {
+        "additionalProperties": false,
+        "properties": {
+          "comment": {
+            "$ref": "#/components/schemas/SpecComment"
+          },
+          "version": {
+            "$ref": "#/components/schemas/DocumentVersion"
+          }
+        },
+        "required": [
+          "version",
+          "comment"
+        ],
+        "title": "SuggestionAccepted",
         "type": "object"
       },
       "TaskCreate": {
@@ -861,6 +1804,35 @@
         ],
         "title": "TodoReplace",
         "type": "object"
+      },
+      "VersionPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentVersionListed"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "VersionPage",
+        "type": "object"
       }
     }
   },
@@ -1070,9 +2042,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Specs Taskboard Api V1 Specs Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SpecPage"
                 }
               }
             },
@@ -1118,9 +2088,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Create Spec Taskboard Api V1 Specs Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SpecDetail"
                 }
               }
             },
@@ -1239,9 +2207,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Spec Taskboard Api V1 Specs  Key  Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SpecDetail"
                 }
               }
             },
@@ -1298,9 +2264,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Patch Spec Taskboard Api V1 Specs  Key  Patch",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SpecDetail"
                 }
               }
             },
@@ -1421,9 +2385,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Comments Taskboard Api V1 Specs  Key  Comments Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/CommentList"
                 }
               }
             },
@@ -1490,9 +2452,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Add Comment Taskboard Api V1 Specs  Key  Comments Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SpecComment"
                 }
               }
             },
@@ -1581,9 +2541,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Accept Suggestion Taskboard Api V1 Specs  Key  Comments  Comment Id  Accept Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SuggestionAccepted"
                 }
               }
             },
@@ -1671,9 +2629,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Dismiss Suggestion Taskboard Api V1 Specs  Key  Comments  Comment Id  Dismiss Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SpecComment"
                 }
               }
             },
@@ -1751,9 +2707,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Resolve Comment Taskboard Api V1 Specs  Key  Comments  Comment Id  Resolve Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SpecComment"
                 }
               }
             },
@@ -1822,9 +2776,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Documents Taskboard Api V1 Specs  Key  Docs Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/DocumentList"
                 }
               }
             },
@@ -1900,7 +2852,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Response Get Document Taskboard Api V1 Specs  Key  Docs  Path  Get"
+                  "$ref": "#/components/schemas/DocumentBody"
                 }
               },
               "text/markdown": {
@@ -1984,9 +2936,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Put Document Taskboard Api V1 Specs  Key  Docs  Path  Put",
-                  "type": "object"
+                  "$ref": "#/components/schemas/DocumentVersion"
                 }
               }
             },
@@ -2103,9 +3053,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Versions Taskboard Api V1 Specs  Key  Docs  Path  Versions Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/VersionPage"
                 }
               }
             },
