@@ -56,6 +56,7 @@ def test_applies_twice_idempotent(empty_db_url):
         "0002_projects.sql",
         "0003_decision_withdrawal.sql",
         "0004_specs.sql",
+        "0005_plan_steps.sql",
     ]
     assert run_migrations(empty_db_url, PACKAGE) == []
     with psycopg.connect(empty_db_url) as conn:
@@ -233,6 +234,7 @@ def test_migration_backfills_default(empty_db_url):
         "0002_projects.sql",
         "0003_decision_withdrawal.sql",
         "0004_specs.sql",
+        "0005_plan_steps.sql",
     ]
     with psycopg.connect(empty_db_url) as conn:
         assert conn.execute("SELECT project FROM tasks").fetchall() == [("default",)]
@@ -297,6 +299,7 @@ def test_legacy_withdrawn_row_survives_check(empty_db_url):
     assert run_migrations(empty_db_url, PACKAGE) == [
         "0003_decision_withdrawal.sql",
         "0004_specs.sql",
+        "0005_plan_steps.sql",
     ]
     with psycopg.connect(empty_db_url) as conn:
         row = conn.execute(
@@ -466,3 +469,100 @@ def test_migration_is_idempotent(conn):
     conn.execute(text)
     conn.execute(text)
     test_specs_schema(conn)
+
+
+def test_plan_steps_schema(conn):
+    assert "spec_plans" in {
+        r[0]
+        for r in conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+        )
+    }
+    plans = columns(conn, "spec_plans")
+    for col in (
+        "spec_id",
+        "goal",
+        "architecture",
+        "tech_stack",
+        "constraints",
+        "review_focus",
+        "version",
+        "updated_at",
+        "updated_by_kind",
+        "updated_by_session",
+        "updated_by_slug",
+    ):
+        assert col in plans, col
+    tasks = columns(conn, "tasks")
+    assert tasks["step"] == "YES" and tasks["model"] == "YES" and tasks["refs"] == "NO"
+    assert columns(conn, "specs")["steps_version"] == "NO"
+    assert set(columns(conn, "task_deps")) == {"task_id", "depends_on"}
+    spec = add_spec(conn)
+    assert conn.execute("SELECT steps_version FROM specs WHERE id = %s", (spec,)).fetchone() == (0,)
+    task = add_task(conn)
+    assert conn.execute("SELECT refs::text, step FROM tasks WHERE id = %s", (task,)).fetchone() == (
+        "[]",
+        None,
+    )
+
+
+def test_step_checks(conn):
+    spec = add_spec(conn)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_task(conn, step=1)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_task(conn, spec_id=spec, step=0)
+    for bad in ("gpt", ""):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            add_task(conn, model=bad)
+    for model in ("haiku", "sonnet", "opus", "fable"):
+        add_task(conn, model=model)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_task(conn, refs=psycopg.types.json.Jsonb([{"kind": "pr", "value": "x"}] * 21))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_task(conn, refs=psycopg.types.json.Jsonb({}))
+    add_task(conn, refs=psycopg.types.json.Jsonb([{"kind": "pr", "value": "x"}] * 20))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO spec_plans (spec_id, goal, updated_by_kind) VALUES (%s, %s, 'user')",
+            (spec, "g" * 501),
+        )
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO spec_plans (spec_id, constraints, updated_by_kind)"
+            " VALUES (%s, %s, 'user')",
+            (spec, psycopg.types.json.Jsonb(["c"] * 51)),
+        )
+
+
+def test_step_numbers_unique_per_spec_and_deferred(conn):
+    spec, other = add_spec(conn, name="a"), add_spec(conn, name="b")
+    one = add_task(conn, spec_id=spec, step=1)
+    two = add_task(conn, spec_id=spec, step=2)
+    add_task(conn, spec_id=other, step=1)
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        add_task(conn, spec_id=spec, step=1)
+    with conn.transaction():
+        conn.execute("UPDATE tasks SET step = 2 WHERE id = %s", (one,))
+        conn.execute("UPDATE tasks SET step = 1 WHERE id = %s", (two,))
+    assert conn.execute(
+        "SELECT step FROM tasks WHERE id = ANY(%s) ORDER BY id", ([one, two],)
+    ).fetchall() == [(2,), (1,)]
+
+
+def test_task_deps_rows(conn):
+    one, two = add_task(conn), add_task(conn)
+    conn.execute("INSERT INTO task_deps (task_id, depends_on) VALUES (%s, %s)", (two, one))
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute("INSERT INTO task_deps (task_id, depends_on) VALUES (%s, %s)", (two, one))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("INSERT INTO task_deps (task_id, depends_on) VALUES (%s, %s)", (one, one))
+    conn.execute("DELETE FROM tasks WHERE id = %s", (one,))
+    assert conn.execute("SELECT count(*) FROM task_deps").fetchone() == (0,)
+
+
+def test_plan_steps_migration_is_idempotent(conn):
+    text = (resources.files(PACKAGE) / "migrations" / "0005_plan_steps.sql").read_text()
+    conn.execute(text)
+    conn.execute(text)
+    test_plan_steps_schema(conn)

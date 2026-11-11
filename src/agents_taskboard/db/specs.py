@@ -484,12 +484,18 @@ async def list_versions(
 
 async def soft_delete(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) -> None:
     """Delete a spec for good from every read: sets `deleted_at` (the name is free again) and
-    detaches its tasks (each gets a `spec_detached` event). Raises NotFound."""
+    detaches its tasks (each gets a `spec_detached` event; steps lose their number, plan client
+    key and dependencies). Raises NotFound."""
     async with conn.transaction():
         await _lock_spec(conn, actor, spec_id)
+        await conn.execute(
+            "DELETE FROM task_deps d USING tasks t WHERE t.id = d.task_id AND t.spec_id = %s",
+            (spec_id,),
+        )
         cur = await conn.execute(
-            "UPDATE tasks SET spec_id = NULL, version = version + 1, updated_at = now()"
-            " WHERE spec_id = %s RETURNING id",
+            "UPDATE tasks SET spec_id = NULL, step = NULL,"
+            " client_key = CASE WHEN step IS NULL THEN client_key END,"
+            " version = version + 1, updated_at = now() WHERE spec_id = %s RETURNING id",
             (spec_id,),
         )
         detached = [r[0] for r in await cur.fetchall()]

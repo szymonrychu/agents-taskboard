@@ -2,6 +2,14 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-11 - plan header and steps schema and repository (T-116 L1)
+
+- Migration is `0005_plan_steps.sql` (0004 was specs). `UNIQUE (spec_id, step)` is `DEFERRABLE INITIALLY DEFERRED` so a renumber commits as a whole. Postgres refuses `ON CONFLICT DO NOTHING` without an arbiter once a deferrable unique exists on the table, so `tasks.create_task` now names its arbiter `(created_by_session, client_key) WHERE client_key IS NOT NULL` (same behaviour, the only other key is the pk).
+- `set_steps` matches existing steps by their current number `n`; the client key `plan-<spec id>-<n>` is stored at create and cleared whenever the step loses or changes its number (drop, insert, reorder, leaving the spec), so a stored plan key always names the current number and a new step never collides on the per-creator client key index. A set that changes nothing does not bump `steps_version`; any created, updated (title, body, model, labels, todo, deps) or dropped step bumps it once.
+- Renumbering (insert, reorder) does not bump the task `version`, so a step edit in flight is not made stale by someone else's reorder; dropping does (status changes). `set_deps`, `reorder` take the actor (the plan's signatures had none) because every write logs events. Lock order everywhere: spec row, then its step rows; `next_step` locks only the candidate step (`SKIP LOCKED`).
+- Steps leave their plan when the task leaves the spec: `patch_task` (spec or project change) and `soft_delete` clear `step`, the plan client key and the task's `task_deps` rows, else `CHECK (step IS NULL OR spec_id IS NOT NULL)` would fail. A hard delete of a spec with steps would still trip that CHECK through `ON DELETE SET NULL (spec_id)`; no route hard-deletes.
+- Caps in `db/steps.py`: step body 32 KiB (`TooLarge`), refs 20 and kinds pr/commit/branch/tag/url (`check_refs`, also a DB CHECK on the count), todo 100, header goal 500 / architecture 4000 / tech_stack 1000 / constraints and review_focus 50 of 1000 (`InvalidRequest`). `steps.StaleVersion` subclasses `specs.StaleVersion` (`current_version` is the plan version or `steps_version`).
+
 ## 2026-11-11 - spec notices, stream ids and catch-up (T-116 A5)
 
 - The stream hub now treats the events table as its only source: NOTIFY on `task_changed` or `spec_changed` (one LISTEN per channel) only wakes the poll, which reads events past its id cursor and publishes `(event id, task or spec, project, payload)`. Why: every SSE event needs `id: <events.id>`, which a NOTIFY payload (the task id) did not carry, and a cursor read never repeats a change the way the old "heard" set had to avoid. A subscription keeps the latest change per task or spec (coalescing), sent in id order.

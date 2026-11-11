@@ -109,7 +109,9 @@ async def create_task(
             "INSERT INTO tasks (title, body, kind, status, labels, assignee_session,"
             " created_by_kind, created_by_session, created_by_slug, client_key, project, spec_id)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-            " ON CONFLICT DO NOTHING RETURNING id",
+            # the arbiter is named: ON CONFLICT cannot use the deferrable (spec_id, step) key
+            " ON CONFLICT (created_by_session, client_key) WHERE client_key IS NOT NULL"
+            " DO NOTHING RETURNING id",
             (
                 new.title,
                 new.body,
@@ -158,8 +160,8 @@ async def patch_task(
     scope, scope_params = scoped(actor)
     async with conn.transaction():
         cur = await conn.cursor(row_factory=dict_row).execute(
-            "SELECT version, title, body, status, labels, assignee_session, project, spec_id"
-            f" FROM tasks t WHERE t.id = %s{scope} FOR UPDATE",
+            "SELECT version, title, body, status, labels, assignee_session, project, spec_id,"
+            f" step FROM tasks t WHERE t.id = %s{scope} FOR UPDATE",
             (task_id, *scope_params),
         )
         row = await cur.fetchone()
@@ -173,6 +175,13 @@ async def patch_task(
             changed["spec_id"] = None
         if not changed:
             return False
+        left_plan = "spec_id" in changed and row["step"] is not None
+        if left_plan:
+            # a step leaving its spec loses its number, plan client key and dependencies
+            changed |= {"step": None, "client_key": None}
+            await conn.execute(
+                "DELETE FROM task_deps WHERE task_id = %s OR depends_on = %s", (task_id, task_id)
+            )
         assignments = [sql.SQL("{} = %s").format(sql.Identifier(k)) for k in changed]
         cur = await _guard_spec(
             conn,
@@ -189,6 +198,8 @@ async def patch_task(
         plain = [k for k in ("title", "body", "assignee_session") if k in changed]
         if plain:
             await append_event(conn, task_id, actor, "updated", {"fields": plain})
+        if left_plan:
+            await append_event(conn, task_id, actor, "step_removed", {"step": row["step"]})
         if "spec_id" in changed:
             await append_event(
                 conn,
