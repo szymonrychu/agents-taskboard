@@ -134,16 +134,17 @@ async def withdraw_decision(
     superseded_by: int | None,
     answered_elsewhere: str | None,
 ) -> Decision | None:
-    """Withdraw an open decision of the task asked by the actor's session, recording why and the
-    outcome (exactly one of superseded_by and answered_elsewhere); None when no row matched (also
-    when the task is outside the actor's projects)."""
+    """Withdraw an open decision of the task asked by the actor's session (or by any session when
+    the actor is a superleader), recording why and the outcome (exactly one of superseded_by and
+    answered_elsewhere); None when no row matched (also when the task is outside the actor's
+    projects)."""
     scope, scope_params = scoped(actor)
     async with conn.transaction():
         cur = await conn.execute(
             "UPDATE decisions d SET status = 'withdrawn', withdraw_reason = %s,"
             " superseded_by = %s, answered_elsewhere = %s FROM tasks t"
             " WHERE d.id = %s AND d.task_id = %s AND d.status = 'open'"
-            f" AND d.asking_session = %s AND t.id = d.task_id{scope}"
+            f" AND (d.asking_session = %s OR %s) AND t.id = d.task_id{scope}"
             " RETURNING d.task_id",
             (
                 reason,
@@ -152,6 +153,7 @@ async def withdraw_decision(
                 decision_id,
                 task_id,
                 actor.session_id,
+                actor.is_superleader,
                 *scope_params,
             ),
         )

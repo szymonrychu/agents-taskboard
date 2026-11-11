@@ -7,7 +7,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from test_api_specs import SPECS, doc_url, make_spec
-from test_api_tasks import S1, agent
+from test_api_tasks import S1, S2, agent
 from test_scope import ORCH, orchestrator
 
 from agents_taskboard.api.actors import Actor
@@ -148,14 +148,13 @@ async def test_comment_of_other_spec_404(service_client):
     assert r.status_code == 404
 
 
-async def test_accept_on_relay_404(service_client):
+async def test_accept_has_no_relay_route(service_client):
     spec = await make_spec(service_client)
     c = await comment(service_client, spec["key"], agent(), path="plan.md", suggestion="s")
-    for action, body in (("accept", {"version": 1}), ("dismiss", None)):
-        r = await service_client.post(
-            f"{comments_url(spec['key'])}/{c['id']}/{action}", json=body, headers=agent()
-        )
-        assert r.status_code == 404
+    r = await service_client.post(
+        f"{comments_url(spec['key'])}/{c['id']}/accept", json={"version": 1}, headers=agent()
+    )
+    assert r.status_code == 404
 
 
 async def test_accept_by_user_writes_version(service_client, web_client, conn):
@@ -242,6 +241,24 @@ async def test_second_decision_409_and_dismiss(service_client, web_client, conn)
     assert (r.status_code, r.json()["error"]["code"]) == (409, "already_decided")
 
 
+async def test_superleader_dismisses_suggestion_agent_denied_accept_denied(
+    service_client, web_client, conn
+):
+    spec = await make_spec(service_client)
+    c = await comment(service_client, spec["key"], agent(), path="plan.md", suggestion="s")
+    base = f"{comments_url(spec['key'])}/{c['id']}"
+    for projects in ("default", "default,other"):
+        r = await service_client.post(f"{base}/dismiss", headers=agent(S2, "x", projects=projects))
+        assert (r.status_code, r.json()["error"]["code"]) == (403, "superleader_only")
+    sl = agent(S2, "sl")
+    r = await service_client.post(f"{base}/accept", json={"version": 1}, headers=sl)
+    assert r.status_code in (404, 405)
+    r = await service_client.post(f"{base}/dismiss", headers=sl)
+    assert r.status_code == 200, r.text
+    assert r.json()["suggestion_status"] == "dismissed" and r.json()["resolved_at"] is not None
+    assert spec_events(conn)[-1] == ("suggestion_dismissed", {"comment_id": c["id"]})
+
+
 async def test_no_suggestion_422(service_client, web_client):
     spec = await make_spec(service_client)
     c = await comment(service_client, spec["key"], agent())
@@ -267,11 +284,14 @@ async def test_agent_actor_on_user_router_403():
         lambda _, exc: error_response(exc.status, exc.code, exc.message)
     )
     app.include_router(
-        build_spec_router(lambda: Actor(kind="agent", session_id=S1), user_routes=True)
+        build_spec_router(
+            lambda: Actor(kind="agent", session_id=S1, projects=frozenset({"a"})), user_routes=True
+        )
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://t"
     ) as client:
-        for action, body in (("accept", {"version": 1}), ("dismiss", None)):
-            r = await client.post(f"/specs/S-1/comments/1/{action}", json=body)
-            assert (r.status_code, r.json()["error"]["code"]) == (403, "user_only")
+        r = await client.post("/specs/S-1/comments/1/accept", json={"version": 1})
+        assert (r.status_code, r.json()["error"]["code"]) == (403, "user_only")
+        r = await client.post("/specs/S-1/comments/1/dismiss")
+        assert (r.status_code, r.json()["error"]["code"]) == (403, "superleader_only")

@@ -288,11 +288,26 @@ async def test_lone_surrogate_body_422(service_client):
     assert (r.status_code, r.json()["error"]["code"]) == (422, "invalid_request")
 
 
-async def test_delete_relay_404_user_204_then_404_everywhere(service_client, web_client):
+async def test_delete_denied_for_non_superleader_agent(service_client, web_client):
     spec = await make_spec(service_client)
     url = f"{SPECS}/{spec['key']}"
-    r = await service_client.delete(url, headers=agent())
-    assert r.status_code == 404
+    for projects in ("default", "default,other"):
+        r = await service_client.delete(url, headers=agent(projects=projects))
+        assert (r.status_code, r.json()["error"]["code"]) == (403, "superleader_only")
+    assert (await web_client.get(url)).status_code == 200
+
+
+async def test_superleader_deletes_spec(service_client, web_client):
+    spec = await make_spec(service_client)
+    url = f"{SPECS}/{spec['key']}"
+    assert (await service_client.delete(url, headers=agent(S2, "sl"))).status_code == 204
+    assert (await web_client.get(url)).status_code == 404
+    assert (await service_client.delete(url, headers=agent(S2, "sl"))).status_code == 404
+
+
+async def test_delete_user_204_then_404_everywhere(service_client, web_client):
+    spec = await make_spec(service_client)
+    url = f"{SPECS}/{spec['key']}"
     r = await web_client.delete(url)
     assert r.status_code == 204
     for client, headers in ((web_client, {}), (service_client, agent())):

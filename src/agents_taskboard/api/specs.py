@@ -1,6 +1,7 @@
 """Spec and document routes (base design 3.5, 4.2), mounted on every listener. Only the actor
-dependency differs; `user_routes=True` (web and delegate listeners) adds the user-only routes,
-so the relay answers 404 for them like for any unknown route."""
+dependency differs; `user_routes=True` (web and delegate listeners) adds the user-only accept
+route, so the relay answers 404 for it like for any unknown route. Delete and dismiss are on every
+listener for the user and a superleader (scope `*`)."""
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -87,6 +88,13 @@ async def load_spec(request: Request, actor: Actor, key: str) -> dict[str, Any]:
         raise ApiError(404, "not_found", f"no spec {key}")
     spec["url"] = spec_url(public_url(request), spec["key"])
     return spec
+
+
+def require_user_or_superleader(actor: Actor, what: str) -> None:
+    """Delete and dismiss belong to the user and, alone, to a superleader (scope `*`); accepting
+    a suggestion and approving a spec stay user-only."""
+    if actor.kind != "user" and not actor.is_superleader:
+        raise ApiError(403, "superleader_only", f"only the user or a superleader {what}")
 
 
 def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> APIRouter:
@@ -182,24 +190,24 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
                 await repo.patch_spec(conn, actor, spec_id, body.version, changes)
         return await load_spec(request, actor, key)
 
-    if user_routes:
+    @router.delete("/specs/{key}", status_code=204)
+    async def delete_spec(key: str, request: Request, actor: ActorDep) -> Response:
+        require_user_or_superleader(actor, "deletes a spec")
+        spec_id = spec_id_of(key)
+        with repo_errors(key):
+            async with pool_of(request).connection() as conn:
+                await repo.soft_delete(conn, actor, spec_id)
+        return Response(status_code=204)
 
-        @router.delete("/specs/{key}", status_code=204)
-        async def delete_spec(key: str, request: Request, actor: ActorDep) -> Response:
-            if actor.kind != "user":
-                raise ApiError(403, "user_only", "only the user deletes a spec")
-            spec_id = spec_id_of(key)
-            with repo_errors(key):
-                async with pool_of(request).connection() as conn:
-                    await repo.soft_delete(conn, actor, spec_id)
-            return Response(status_code=204)
-
-    else:
-
-        @router.delete("/specs/{key}", status_code=204, include_in_schema=False)
-        async def delete_spec_relay(key: str) -> Response:
-            """Agents never delete: the relay answers like an unknown route (404), not 405."""
-            raise ApiError(404, "not_found", "Not Found")
+    @router.post("/specs/{key}/comments/{comment_id}/dismiss", response_model=SpecComment)
+    async def dismiss_suggestion(
+        key: str, comment_id: int, request: Request, actor: ActorDep
+    ) -> dict[str, Any]:
+        require_user_or_superleader(actor, "dismisses a suggestion")
+        spec_id = spec_id_of(key)
+        with repo_errors(key):
+            async with pool_of(request).connection() as conn:
+                return await repo.dismiss_suggestion(conn, actor, spec_id, comment_id)
 
     @router.get("/specs/{key}/docs", response_model=DocumentList)
     async def list_documents(key: str, request: Request, actor: ActorDep) -> dict[str, Any]:
@@ -382,16 +390,5 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
                         conn, actor, spec_id, comment_id, body.version
                     )
             return {"version": version, "comment": comment}
-
-        @router.post("/specs/{key}/comments/{comment_id}/dismiss", response_model=SpecComment)
-        async def dismiss_suggestion(
-            key: str, comment_id: int, request: Request, actor: ActorDep
-        ) -> dict[str, Any]:
-            if actor.kind != "user":
-                raise ApiError(403, "user_only", "only the user dismisses a suggestion")
-            spec_id = spec_id_of(key)
-            with repo_errors(key):
-                async with pool_of(request).connection() as conn:
-                    return await repo.dismiss_suggestion(conn, actor, spec_id, comment_id)
 
     return router
