@@ -23,13 +23,14 @@ from agents_common.orchestrator import (
 from agents_common.runtime import advisory_singleton, run_service
 from psycopg_pool import AsyncConnectionPool
 
-from agents_taskboard.db.events import CHANNEL, claim_label_event, mark_scanned
+from agents_taskboard.db.events import CHANNEL, SPEC_CHANNEL, claim_label_event, mark_scanned
 from agents_taskboard.db.notices import (
     claim_notice,
     enqueue_label_notice,
     mark_sent,
     schedule_retry,
 )
+from agents_taskboard.db.specs import spec_key
 from agents_taskboard.db.tasks import task_key, task_url
 from agents_taskboard.settings import Settings
 
@@ -41,6 +42,11 @@ LOCK_NAME = "agents-taskboard-notifier"
 def notice_text(key: str, public_url: str) -> str:
     """The whole message: a task key and a link, never any task content."""
     return f"Task {key} was updated: {task_url(public_url.rstrip('/'), key)}"
+
+
+def spec_notice_text(key: str, public_url: str) -> str:
+    """The whole message about a spec: its key and a link, never any spec content."""
+    return f"Spec {key} was updated: {public_url.rstrip('/')}/specs/{key}"
 
 
 class SessionLookup:
@@ -128,7 +134,11 @@ async def send_next(
         notice = await claim_notice(conn)
         if notice is None:
             return None
-        text = notice_text(task_key(notice.task_id), public_url)
+        if notice.spec_id is not None:
+            text = spec_notice_text(spec_key(notice.spec_id), public_url)
+        else:
+            assert notice.task_id is not None
+            text = notice_text(task_key(notice.task_id), public_url)
         failed = None
         try:
             await client.post_message(notice.session_id, text)
@@ -146,8 +156,8 @@ async def send_next(
     return False
 
 
-async def _wake_on_notify(url: str, wake: asyncio.Event) -> None:
-    async for _ in listen(url, CHANNEL):
+async def _wake_on_notify(url: str, channel: str, wake: asyncio.Event) -> None:
+    async for _ in listen(url, channel):
         wake.set()
 
 
@@ -167,7 +177,8 @@ async def run_notifier(
     stop: asyncio.Event,
     lookup: SessionLookup | None = None,
 ) -> None:
-    """Scan label events, then drain due notices, then wait for NOTIFY task_changed or the poll
+    """Scan label events, then drain due notices, then wait for NOTIFY task_changed or
+    spec_changed or the poll
     interval. A failed send only reschedules its own row (exponential, capped), so it never
     stalls other notices; a failed label lookup leaves its event unscanned and pauses only the
     scanning (same backoff), never the sending. Runs until `stop` is set."""
@@ -180,7 +191,11 @@ async def run_notifier(
     scan_failures = 0
     scan_resume = 0.0
     loop = asyncio.get_running_loop()
-    listener = asyncio.create_task(_wake_on_notify(settings.database_url.get_secret_value(), wake))
+    url = settings.database_url.get_secret_value()
+    listeners = [
+        asyncio.create_task(_wake_on_notify(url, channel, wake))
+        for channel in (CHANNEL, SPEC_CHANNEL)
+    ]
     try:
         while not stop.is_set():
             wake.clear()
@@ -213,9 +228,11 @@ async def run_notifier(
     finally:
         if own:
             await lookup.aclose()
-        listener.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await listener
+        for listener in listeners:
+            listener.cancel()
+        for listener in listeners:
+            with contextlib.suppress(asyncio.CancelledError):
+                await listener
 
 
 async def run_singleton(

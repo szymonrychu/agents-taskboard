@@ -25,6 +25,7 @@ from agents_taskboard.db.events import (
     notify_changed,
     notify_spec_changed,
 )
+from agents_taskboard.db.notices import enqueue_spec_notice
 from agents_taskboard.db.scope import scoped
 
 _KEY = re.compile(r"S-([1-9][0-9]{0,17})")
@@ -155,6 +156,16 @@ async def get_spec(
     )
     spec["open_comments"] = (await cur.fetchone())[0]
     return spec
+
+
+async def _notify_owner(conn: psycopg.AsyncConnection, actor: Actor, spec: dict[str, Any]) -> None:
+    """A user's change notifies the spec's assignee session, else its creating session (none
+    for a spec created by the user and not assigned). An agent's own change notifies nobody."""
+    if actor.kind != "user":
+        return
+    target = spec["assignee_session"] or spec["created_by_session"]
+    if target is not None:
+        await enqueue_spec_notice(conn, spec["id"], target)
 
 
 async def _lock_spec(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) -> dict[str, Any]:
@@ -366,6 +377,7 @@ async def write_version_locked(
     if returned:
         detail["status"] = "review"
     await append_spec_event(conn, spec_id, actor, kind, detail)
+    await _notify_owner(conn, actor, spec)
     await notify_spec_changed(conn, spec_id)
     return version, True
 
@@ -548,7 +560,7 @@ async def patch_spec(
     async with conn.transaction():
         cur = await conn.cursor(row_factory=dict_row).execute(
             "SELECT s.id, s.version, s.title, s.status, s.labels, s.project,"
-            " s.assignee_session, s.assignee_slug FROM specs s"
+            " s.assignee_session, s.assignee_slug, s.created_by_session FROM specs s"
             f" WHERE s.id = %s AND s.deleted_at IS NULL{scope} FOR UPDATE",
             (spec_id, *params),
         )
@@ -604,6 +616,9 @@ async def patch_spec(
                 )
                 await notify_changed(conn, task_id)
         await append_spec_event(conn, spec_id, actor, "spec_updated", detail)
+        if changed.get("status") == "approved":
+            # notify whoever owns the spec after this write (a PATCH may also reassign)
+            await _notify_owner(conn, actor, {**row, **changed})
         await notify_spec_changed(conn, spec_id)
         return True
 
@@ -698,7 +713,7 @@ async def add_comment(
     check_body(body, COMMENT_CAP)
     check_body(suggestion)
     async with conn.transaction():
-        await _lock_spec(conn, actor, spec_id)
+        spec = await _lock_spec(conn, actor, spec_id)
         if client_key is not None:
             existing = await _replayed_comment(conn, actor, spec_id, client_key)
             if existing is not None:
@@ -727,6 +742,7 @@ async def add_comment(
         )
         comment_id = (await cur.fetchone())[0]
         await append_spec_event(conn, spec_id, actor, "comment_added", {"comment_id": comment_id})
+        await _notify_owner(conn, actor, spec)
         await notify_spec_changed(conn, spec_id)
         stored = await _comment(conn, spec_id, comment_id)
         assert stored is not None
@@ -855,12 +871,13 @@ async def dismiss_suggestion(
     """Mark the suggestion dismissed and the comment resolved. Raises NotFound, NoSuggestion,
     AlreadyDecided."""
     async with conn.transaction():
-        await _lock_spec(conn, actor, spec_id)
+        spec = await _lock_spec(conn, actor, spec_id)
         await _open_suggestion(conn, spec_id, comment_id)
         await _decide(conn, actor, comment_id, "dismissed", None)
         await append_spec_event(
             conn, spec_id, actor, "suggestion_dismissed", {"comment_id": comment_id}
         )
+        await _notify_owner(conn, actor, spec)
         await notify_spec_changed(conn, spec_id)
         decided = await _comment(conn, spec_id, comment_id)
         assert decided is not None

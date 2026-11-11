@@ -2,6 +2,13 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-11 - spec notices, stream ids and catch-up (T-116 A5)
+
+- The stream hub now treats the events table as its only source: NOTIFY on `task_changed` or `spec_changed` (one LISTEN per channel) only wakes the poll, which reads events past its id cursor and publishes `(event id, task or spec, project, payload)`. Why: every SSE event needs `id: <events.id>`, which a NOTIFY payload (the task id) did not carry, and a cursor read never repeats a change the way the old "heard" set had to avoid. A subscription keeps the latest change per task or spec (coalescing), sent in id order.
+- Catch-up accepts both `Last-Event-ID` and `?after_id=` (the larger wins) because agents-web's `openStream` reconnects by building a new `EventSource` with `?after_id=` and cannot set the header. The handler subscribes first, waits for the hub cursor (`hub.ready()`), replays the latest event per key past the id, then skips live changes with an id at or below the last one sent. An id below `min(events.id) - 1` sends one `reset` (with the newest id) and no replay. The stream is user-only, so replay applies no actor scope, only `?project=` (on the event row's project).
+- Spec notices: reason `spec`, `notices.spec_id`, pending unique index `(spec_id, session_id) WHERE reason = 'spec' AND status = 'pending'` (in 0004, still unreleased). Sent for user comments, user approval, user-written versions (also accept) and dismiss, to the assignee else the creator; agents' own writes notify nobody. The notifier also wakes on `spec_changed`.
+- Gate semantics for the stage 4 planning tools (recorded here so they survive): the gate task is the improvement's own task linked to the spec, the lowest-id non-step task of the spec (T-116 Q2 A); the gate opens when its decisions are answered, approval stays optional (Q3 A).
+
 ## 2026-11-11 - tasks linked to specs, spec counts (T-116 A4)
 
 - `spec` on task create and PATCH: the spec is looked up in the caller's scope first (404 with the unknown-key body), the task takes the spec's project (an explicit other `project` is 422 `project_mismatch`), and `require_target` still checks that project. A PATCH changing `project` without `spec` sets `spec_id = NULL` in the same UPDATE (the composite FK would refuse the move otherwise); only the spec's own move keeps its tasks attached (FK `ON UPDATE CASCADE`). A spec that moves between lookup and write trips the FK, mapped to 422 `project_mismatch` (`tasks.SpecMoved`). Link changes bump the task version and log `spec_set {from, to}`.

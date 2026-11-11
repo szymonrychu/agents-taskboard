@@ -127,3 +127,7 @@ BEGIN
     END IF;
 END
 $$;
+
+-- At most one pending spec notice per spec and session; later ones are absorbed.
+CREATE UNIQUE INDEX IF NOT EXISTS notices_one_pending_spec_idx
+    ON notices (spec_id, session_id) WHERE reason = 'spec' AND status = 'pending';
