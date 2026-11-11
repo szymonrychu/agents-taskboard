@@ -31,6 +31,10 @@ class SpecMoved(Exception):
     """The spec named for the task changed project after it was looked up."""
 
 
+class SpecGone(Exception):
+    """The spec named for the task was deleted after it was looked up."""
+
+
 class StaleVersion(Exception):
     pass
 
@@ -65,9 +69,18 @@ def task_url(public_url: str, key: str) -> str:
     return f"{public_url}/tasks/{key}"
 
 
-async def _guard_spec(conn: psycopg.AsyncConnection, query: Any, params: tuple) -> Any:
-    """Run a statement that sets `spec_id`; the composite FK (spec_id, project) fails when the
-    spec moved project in between, which is SpecMoved."""
+async def _guard_spec(
+    conn: psycopg.AsyncConnection, query: Any, params: tuple, spec_id: int | None, project: str
+) -> Any:
+    """Run a statement that sets `spec_id`. The spec row is share-locked first, so a concurrent
+    delete (which holds it FOR UPDATE) serialises with the write: a deleted spec is SpecGone. The
+    composite FK (spec_id, project) fails when the spec moved project, which is SpecMoved."""
+    if spec_id is not None:
+        cur = await conn.execute(
+            "SELECT 1 FROM specs WHERE id = %s AND deleted_at IS NULL FOR SHARE", (spec_id,)
+        )
+        if await cur.fetchone() is None:
+            raise SpecGone
     try:
         async with conn.transaction():
             return await conn.execute(query, params)
@@ -111,6 +124,8 @@ async def create_task(
                 new.project,
                 new.spec_id,
             ),
+            new.spec_id,
+            new.project,
         )
         row = await cur.fetchone()
         if row is None:
@@ -166,6 +181,8 @@ async def patch_task(
                 " WHERE id = %s AND version = %s RETURNING id"
             ).format(sql.SQL(", ").join(assignments)),
             (*changed.values(), task_id, version),
+            changed.get("spec_id"),
+            changed.get("project", row["project"]),
         )
         if await cur.fetchone() is None:
             raise StaleVersion

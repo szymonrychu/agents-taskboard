@@ -345,6 +345,9 @@ SPEC_ROUTES = {
         {"body": "x", "base_version": 1},
     ),
     "versions": lambda key: ("GET", f"{SPECS}/{key}/docs/plan.md/versions", None),
+    "comments_get": lambda key: ("GET", f"{SPECS}/{key}/comments", None),
+    "comment_post": lambda key: ("POST", f"{SPECS}/{key}/comments", {"body": "x"}),
+    "resolve": lambda key: ("POST", f"{SPECS}/{key}/comments/@CID@/resolve", None),
 }
 
 
@@ -362,12 +365,20 @@ async def make_spec(client, project: str) -> dict:
 @pytest.mark.parametrize("caller", ["a", "b", "*"])
 async def test_scope_matrix_specs(service_client, conn, route, caller):
     key = (await make_spec(service_client, "a"))["key"]
-    count = "SELECT (SELECT count(*) FROM events), (SELECT count(*) FROM spec_versions)"
+    r = await service_client.post(f"{SPECS}/{key}/comments", json={"body": "c"}, headers=scope("a"))
+    assert r.status_code == 201, r.text
+    cid = str(r.json()["id"])
+    count = (
+        "SELECT (SELECT count(*) FROM events), (SELECT count(*) FROM spec_versions),"
+        " (SELECT count(*) FROM spec_comments), (SELECT count(resolved_at) FROM spec_comments)"
+    )
     before = conn.execute(count).fetchone()
     method, url, body = SPEC_ROUTES[route](key)
+    url = url.replace("@CID@", cid)
     r = await service_client.request(method, url, json=body, headers=scope(caller))
     if caller == "b":
         method, url, body = SPEC_ROUTES[route](UNKNOWN_SPEC)
+        url = url.replace("@CID@", cid)
         unknown = await service_client.request(method, url, json=body, headers=scope(caller))
         assert (r.status_code, unknown.status_code) == (404, 404), r.text
         assert r.json() == json.loads(json.dumps(unknown.json()).replace(UNKNOWN_SPEC, key))

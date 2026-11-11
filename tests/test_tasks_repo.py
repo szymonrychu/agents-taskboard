@@ -74,3 +74,32 @@ async def test_parse_task_key():
     assert repo.parse_key("T-12") == 12
     for bad in ("T-0", "T-", "t-1", "T-01x", "12", "T-" + "9" * 30):
         assert repo.parse_key(bad) is None
+
+
+async def _deleted_spec(pool, conn) -> int:
+    from agents_taskboard.db import specs as specs_repo
+
+    async with pool.connection() as c:
+        spec, _ = await specs_repo.create_spec(
+            c, USER, project="default", name="gone", title="t", labels=[], client_key=None, docs=[]
+        )
+        sid = specs_repo.parse_spec_key(spec["key"])
+        await specs_repo.soft_delete(c, USER, sid)
+    return sid
+
+
+async def test_create_task_refuses_a_spec_deleted_after_lookup(pool, conn):
+    sid = await _deleted_spec(pool, conn)
+    async with pool.connection() as c:
+        with pytest.raises(repo.SpecGone):
+            await repo.create_task(c, USER, new(spec_id=sid))
+    assert conn.execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
+
+
+async def test_patch_task_refuses_a_spec_deleted_after_lookup(pool, conn):
+    sid = await _deleted_spec(pool, conn)
+    async with pool.connection() as c:
+        task_id, _ = await repo.create_task(c, USER, new())
+        with pytest.raises(repo.SpecGone):
+            await repo.patch_task(c, USER, task_id, 1, {"spec_id": sid})
+    assert conn.execute("SELECT spec_id FROM tasks WHERE id = %s", (task_id,)).fetchone() == (None,)

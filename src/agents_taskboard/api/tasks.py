@@ -117,6 +117,8 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
                 task_id, created = await repo.create_task(conn, actor, new)
         except repo.SpecMoved:
             raise ApiError(422, "project_mismatch", "the spec moved to another project") from None
+        except repo.SpecGone:
+            raise ApiError(404, "not_found", "the spec was deleted") from None
         if not created:
             response.status_code = 200
         return await load_one(request, actor, task_id)
@@ -220,6 +222,8 @@ def build_router(actor_dep: Callable[..., Actor]) -> APIRouter:
             raise ApiError(412, "stale_version", "task changed since it was read") from None
         except repo.SpecMoved:
             raise ApiError(422, "project_mismatch", "the spec moved to another project") from None
+        except repo.SpecGone:
+            raise ApiError(404, "not_found", "the spec was deleted") from None
         return await load_one(request, actor, task_id)
 
     @router.post("/tasks/{key}/comments", status_code=201)
