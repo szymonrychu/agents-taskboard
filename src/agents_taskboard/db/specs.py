@@ -513,6 +513,15 @@ class UserOnly(Exception):
     pass
 
 
+class DecisionsOpen(Exception):
+    """An agent tried to approve a spec while decisions on its open or in_progress linked tasks
+    are still open; `decisions` is the `open_spec_decisions` list."""
+
+    def __init__(self, decisions: list[dict[str, Any]]) -> None:
+        super().__init__("open decisions on linked tasks")
+        self.decisions = decisions
+
+
 class BadCursor(ValueError):
     pass
 
@@ -558,6 +567,20 @@ async def list_specs(
     return [spec_row_json(r) for r in rows], next_cursor
 
 
+async def open_spec_decisions(conn: psycopg.AsyncConnection, spec_id: int) -> list[dict[str, Any]]:
+    """The open decisions on the spec's linked tasks whose status is open or in_progress (plan
+    steps are tasks and count), as `{task, id, question}` by task id then decision id. The one
+    query behind the agent approval check and the gate's `approvable`."""
+    cur = await conn.cursor(row_factory=dict_row).execute(
+        "SELECT 'T-' || t.id AS task, d.id, d.question FROM decisions d"
+        " JOIN tasks t ON t.id = d.task_id"
+        " WHERE t.spec_id = %s AND t.status IN ('open', 'in_progress') AND d.status = 'open'"
+        " ORDER BY t.id, d.id",
+        (spec_id,),
+    )
+    return list(await cur.fetchall())
+
+
 async def patch_spec(
     conn: psycopg.AsyncConnection,
     actor: Actor,
@@ -567,10 +590,12 @@ async def patch_spec(
 ) -> bool:
     """Apply `changes` (keys of PATCH_FIELDS, plus `assignee_slug` with `assignee_session`) if
     `version` is current; returns whether anything changed. An agent may assign only itself and
-    clear only itself, and never approve (UserOnly). A move takes the spec's tasks along (FK
-    cascade); each moved task gets a `project_changed` event. One spec event per write; an
-    approval records the document versions it approved. Raises NotFound, StaleVersion,
-    UserOnly, NameTaken."""
+    clear only itself (UserOnly). An agent that is not a superleader approves only when no decision
+    on the spec's open or in_progress linked tasks is open (else DecisionsOpen), checked under the
+    spec row lock in the same transaction; the user and superleaders approve always. A move takes
+    the spec's tasks along (FK cascade); each moved task gets a `project_changed` event. One spec
+    event per write; an approval records the document versions it approved. Raises NotFound,
+    StaleVersion, UserOnly, DecisionsOpen, NameTaken."""
     scope, params = scoped(actor, "s.project")
     async with conn.transaction():
         cur = await conn.cursor(row_factory=dict_row).execute(
@@ -586,8 +611,10 @@ async def patch_spec(
             raise StaleVersion(row["version"])
         changed = {k: changes[k] for k in PATCH_FIELDS if k in changes and row[k] != changes[k]}
         if actor.kind == "agent":
-            if changed.get("status") == "approved":
-                raise UserOnly("only the user approves a spec")
+            if changed.get("status") == "approved" and not actor.is_superleader:
+                open_ = await open_spec_decisions(conn, spec_id)
+                if open_:
+                    raise DecisionsOpen(open_)
             if "assignee_session" in changed:
                 new = changed["assignee_session"]
                 old = row["assignee_session"]

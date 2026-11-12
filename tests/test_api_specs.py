@@ -116,14 +116,6 @@ async def test_patch_fields_and_stale(service_client):
     assert r.status_code == 422
 
 
-async def test_agent_approve_403_user_only(service_client):
-    spec = await make_spec(service_client)
-    r = await service_client.patch(
-        f"{SPECS}/{spec['key']}", json={"version": 1, "status": "approved"}, headers=agent()
-    )
-    assert r.status_code == 403 and r.json()["error"]["code"] == "user_only"
-
-
 async def test_user_approve_200(service_client, web_client, conn):
     spec = await make_spec(service_client)
     r = await web_client.patch(f"{SPECS}/{spec['key']}", json={"version": 1, "status": "approved"})

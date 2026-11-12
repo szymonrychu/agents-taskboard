@@ -345,3 +345,50 @@ async def test_review_return_event_status_has_from_and_to(pool, conn):
         (sid,),
     ).fetchone()[0]
     assert detail["status"] == {"from": "approved", "to": "review"}
+
+
+async def test_open_spec_decisions_counts_open_and_in_progress_tasks(pool, conn):
+    spec = await make(pool)
+    other = await make(pool, name="plan-b")
+    sid, oid = spec_id_of(spec), spec_id_of(other)
+
+    def task(spec_id: int, status: str) -> int:
+        return conn.execute(
+            "INSERT INTO tasks (title, kind, status, created_by_kind, spec_id)"
+            " VALUES ('t', 'task', %s, 'user', %s) RETURNING id",
+            (status, spec_id),
+        ).fetchone()[0]
+
+    def decide(task_id: int, question: str, status: str = "open") -> int:
+        return conn.execute(
+            "INSERT INTO decisions (task_id, asking_session, asking_slug, question, status, answer,"
+            " withdraw_reason, answered_elsewhere)"
+            " VALUES (%s, %s, 'mx', %s, %s, %s, %s, %s) RETURNING id",
+            (
+                task_id,
+                S1,
+                question,
+                status,
+                '"a"' if status == "answered" else None,
+                "r" if status == "withdrawn" else None,
+                "x" if status == "withdrawn" else None,
+            ),
+        ).fetchone()[0]
+
+    t_open = task(sid, "open")
+    t_prog = task(sid, "in_progress")
+    for status in ("idea", "done", "dropped"):
+        decide(task(sid, status), f"closed {status}")
+    first = decide(t_open, "open one?")
+    decide(t_open, "answered", "answered")
+    decide(t_open, "withdrawn", "withdrawn")
+    second = decide(t_open, "open two?")
+    third = decide(t_prog, "progress?")
+    decide(task(oid, "open"), "other spec")
+    expected = [
+        {"task": f"T-{t_open}", "id": first, "question": "open one?"},
+        {"task": f"T-{t_open}", "id": second, "question": "open two?"},
+        {"task": f"T-{t_prog}", "id": third, "question": "progress?"},
+    ]
+    async with pool.connection() as c:
+        assert await repo.open_spec_decisions(c, sid) == expected

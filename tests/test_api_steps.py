@@ -393,6 +393,8 @@ async def test_gate_states(service_client, web_client):
         "decisions": [],
         "gate": "none",
         "approved": False,
+        "approvable": True,
+        "open_decisions": [],
     }
     r = await service_client.post(TASKS, json={"title": "own", "spec": key}, headers=agent())
     own = r.json()["key"]
@@ -596,3 +598,143 @@ def test_section_multiline_setext_and_entities():
         False,
     )
     assert find_section(doc, "a-b") == ("## A &amp; B\nx\n", False)
+
+
+# -- agent approval and approvable (T-189, S-34) ----------------------------------------------
+
+
+def approve(client, key, version=1, headers=None):
+    return client.patch(
+        f"{SPECS}/{key}",
+        json={"version": version, "status": "approved"},
+        headers=agent(projects="default") if headers is None else headers,
+    )
+
+
+async def add_task(client, key, title="own") -> str:
+    r = await client.post(TASKS, json={"title": title, "spec": key}, headers=agent())
+    assert r.status_code == 201, r.text
+    return r.json()["key"]
+
+
+async def test_agent_approve_without_decisions_200(service_client, conn):
+    key = await make_spec(service_client)
+    r = await approve(service_client, key)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "approved"
+    detail = conn.execute(
+        "SELECT detail FROM events WHERE kind = 'spec_updated' ORDER BY id DESC LIMIT 1"
+    ).fetchone()[0]
+    assert detail["versions"] == {"plan.md": 1}
+
+
+async def test_agent_approve_409_open_decision_on_task(service_client):
+    key = await make_spec(service_client)
+    own = await add_task(service_client, key)
+    d1 = await ask(service_client, own, "Q?")
+    r = await approve(service_client, key)
+    assert err(r) == (409, "decisions_open")
+    error = r.json()["error"]
+    assert error["message"] == "open decisions on linked tasks"
+    assert error["decisions"] == [{"task": own, "id": d1, "question": "Q?"}]
+    r = await service_client.get(f"{SPECS}/{key}", headers=agent())
+    assert r.json()["status"] == "draft"
+
+
+async def test_agent_approve_409_open_decision_on_step(service_client):
+    key = await make_spec(service_client)
+    keys = await seed_steps(service_client, key)
+    d1 = await ask(service_client, keys[0], "Step Q?")
+    r = await approve(service_client, key)
+    assert err(r) == (409, "decisions_open")
+    assert r.json()["error"]["decisions"] == [{"task": keys[0], "id": d1, "question": "Step Q?"}]
+
+
+async def test_agent_approve_after_all_answered_200(service_client, web_client):
+    key = await make_spec(service_client)
+    own = await add_task(service_client, key)
+    d1 = await ask(service_client, own, "Q1?")
+    d2 = await ask(service_client, own, "Q2?")
+    r = await web_client.post(f"{TASKS}/{own}/decisions/{d1}/answer", json={"choice": 0})
+    assert r.status_code == 200, r.text
+    assert err(await approve(service_client, key)) == (409, "decisions_open")
+    r = await service_client.post(
+        f"{TASKS}/{own}/decisions/{d2}/withdraw",
+        json={"reason": "r", "answered_elsewhere": "x"},
+        headers=agent(),
+    )
+    assert r.status_code == 200, r.text
+    assert (await approve(service_client, key)).status_code == 200
+
+
+async def test_closed_task_decision_does_not_block(service_client):
+    key = await make_spec(service_client)
+    done = await add_task(service_client, key, "done one")
+    dropped = await add_task(service_client, key, "dropped one")
+    await ask(service_client, done)
+    await ask(service_client, dropped)
+    for task, status in ((done, "done"), (dropped, "dropped")):
+        r = await service_client.patch(
+            f"{TASKS}/{task}", json={"version": 1, "status": status}, headers=agent()
+        )
+        assert r.status_code == 200, r.text
+    assert (await approve(service_client, key)).status_code == 200
+
+
+async def test_superleader_approves_with_open_decisions(service_client):
+    key = await make_spec(service_client)
+    await ask(service_client, await add_task(service_client, key))
+    r = await approve(service_client, key, headers=agent())
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "approved"
+
+
+async def test_user_approves_with_open_decisions(service_client, web_client):
+    key = await make_spec(service_client)
+    await ask(service_client, await add_task(service_client, key))
+    r = await web_client.patch(f"{SPECS}/{key}", json={"version": 1, "status": "approved"})
+    assert r.status_code == 200, r.text
+
+
+async def test_agent_reapprove_is_noop(service_client, web_client):
+    key = await make_spec(service_client)
+    r = await web_client.patch(f"{SPECS}/{key}", json={"version": 1, "status": "approved"})
+    assert r.status_code == 200, r.text
+    await ask(service_client, await add_task(service_client, key))
+    r = await approve(service_client, key, version=2)
+    assert r.status_code == 200, r.text
+    assert (r.json()["status"], r.json()["version"]) == ("approved", 2)
+
+
+async def test_other_spec_and_unlinked_decisions_do_not_block(service_client):
+    key = await make_spec(service_client)
+    other = await make_spec(service_client, name="plan-b")
+    await ask(service_client, await add_task(service_client, other))
+    r = await service_client.post(TASKS, json={"title": "free"}, headers=agent())
+    await ask(service_client, r.json()["key"])
+    assert (await approve(service_client, key)).status_code == 200
+
+
+async def test_gate_approvable_and_open_decisions(service_client, web_client):
+    key = await make_spec(service_client)
+    keys = await seed_steps(service_client, key)
+    own = await add_task(service_client, key)
+    gone = await add_task(service_client, key, "gone")
+    d_own = await ask(service_client, own, "Own?")
+    d_step = await ask(service_client, keys[1], "Step?")
+    await ask(service_client, gone, "Gone?")
+    r = await service_client.patch(
+        f"{TASKS}/{gone}", json={"version": 1, "status": "dropped"}, headers=agent()
+    )
+    assert r.status_code == 200, r.text
+    g = await gate(service_client, key)
+    assert g["approvable"] is False
+    assert g["open_decisions"] == [
+        {"task": keys[1], "id": d_step, "question": "Step?"},
+        {"task": own, "id": d_own, "question": "Own?"},
+    ]
+    for task, d in ((own, d_own), (keys[1], d_step)):
+        r = await web_client.post(f"{TASKS}/{task}/decisions/{d}/answer", json={"choice": 0})
+        assert r.status_code == 200, r.text
+    g = await gate(service_client, key)
+    assert (g["approvable"], g["open_decisions"]) == (True, [])

@@ -784,7 +784,9 @@ async def get_gate(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) ->
     """The spec's gate (T-116 Q2 A, Q3 A): status, the versions of the current approval (null
     unless approved), the gate task and its decisions other than withdrawn ones. `gate` is
     `none` with no such decision, `waiting` with an open one, `open` when all are answered;
-    `approved` never gates. Raises NotFound (also outside the actor's projects)."""
+    `approved` never gates. `approvable` is true when no decision on the spec's open or
+    in_progress linked tasks is open; `open_decisions` lists them (T-189). Raises NotFound
+    (also outside the actor's projects)."""
     scope, params = scoped(actor, "s.project")
     cur = await conn.execute(
         f"SELECT s.status FROM specs s WHERE s.id = %s AND s.deleted_at IS NULL{scope}",
@@ -818,6 +820,7 @@ async def get_gate(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) ->
         gate = "waiting"
     else:
         gate = "open"
+    open_ = await specs.open_spec_decisions(conn, spec_id)
     return {
         "key": specs.spec_key(spec_id),
         "status": status,
@@ -826,4 +829,6 @@ async def get_gate(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) ->
         "decisions": decisions,
         "gate": gate,
         "approved": status == "approved",
+        "approvable": not open_,
+        "open_decisions": open_,
     }
