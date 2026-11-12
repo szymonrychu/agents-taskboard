@@ -69,7 +69,8 @@ def test_service_app_has_no_answer_route():
 def test_delegate_app_routes_equal_web_app_routes():
     web = _methods(create_web_app(SETTINGS, None))
     delegate = _methods(create_delegate_app(SETTINGS, None))
-    assert web and delegate == web
+    # the delegate listener alone serves the mindmap-only external-changes route
+    assert web and delegate - {("POST", f"{PREFIX}/tasks/{{key}}/external-changes")} == web
 
 
 def test_spec_403_names_project_forbidden():

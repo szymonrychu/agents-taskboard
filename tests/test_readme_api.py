@@ -76,8 +76,12 @@ def test_service_routes_are_a_documented_subset():
 
 def test_delegate_routes_are_the_web_routes_and_documented():
     delegate = routes_of(create_delegate_app(SETTINGS, None))  # type: ignore[arg-type]
-    assert delegate == readme_routes()
+    # the delegate listener adds the mindmap-only external-changes route (a README paragraph)
+    external = f"POST {PREFIX}/tasks/{{key}}/external-changes"
+    assert delegate - {external} == readme_routes()
+    assert external in delegate
     api = section("API")
+    assert "/tasks/{key}/external-changes" in api
     assert "delegate listener" in api
     config = section("Configuration")
     assert "`TASKBOARD_DELEGATE_TOKENS`" in config and "`TASKBOARD_DELEGATE_PORT`" in config

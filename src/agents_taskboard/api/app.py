@@ -21,6 +21,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from agents_taskboard.api.actors import actor_from_service, actor_from_web
 from agents_taskboard.api.decisions import build_router as build_decision_router
 from agents_taskboard.api.errors import ApiError, error_response
+from agents_taskboard.api.external import DelegateGate, build_external_router
 from agents_taskboard.api.projects import build_router as build_projects_router
 from agents_taskboard.api.specs import build_spec_router
 from agents_taskboard.api.steps import build_steps_router
@@ -178,15 +179,21 @@ def create_delegate_app(
     listen_fn: ListenFn = listen,
 ) -> FastAPI:
     """The cluster-only delegate app: the web app's routes acting as a user, behind a bearer
-    gate on the delegate token list (never the relay token)."""
+    gate on the delegate token list (never the relay token), plus the mindmap-only
+    external-changes route."""
 
     def gate(app: FastAPI) -> None:
-        tokens = [t.get_secret_value() for t in settings.delegate_tokens]
-        app.add_middleware(ServiceTokenGate, tokens=tokens)
+        app.add_middleware(
+            DelegateGate,
+            delegate_tokens=[t.get_secret_value() for t in settings.delegate_tokens],
+            mindmap_tokens=[t.get_secret_value() for t in settings.mindmap_tokens],
+        )
 
-    return _user_app(
+    app = _user_app(
         settings, pool, "agents-taskboard-delegate", gate, stream_poll_seconds, listen_fn
     )
+    app.include_router(build_external_router(), prefix=PREFIX)
+    return app
 
 
 def create_service_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI:

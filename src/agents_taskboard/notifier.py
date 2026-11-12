@@ -23,10 +23,17 @@ from agents_common.orchestrator import (
 from agents_common.runtime import advisory_singleton, run_service
 from psycopg_pool import AsyncConnectionPool
 
-from agents_taskboard.db.events import CHANNEL, SPEC_CHANNEL, claim_label_event, mark_scanned
+from agents_taskboard.db.events import (
+    CHANNEL,
+    SPEC_CHANNEL,
+    claim_external_events,
+    claim_label_event,
+    mark_scanned,
+)
 from agents_taskboard.db.notices import (
     claim_notice,
     enqueue_label_notice,
+    enqueue_linked_notice,
     mark_sent,
     schedule_retry,
 )
@@ -120,6 +127,26 @@ async def scan_label_events(conn: psycopg.AsyncConnection, lookup: SessionLookup
     return True
 
 
+async def scan_external_events(conn: psycopg.AsyncConnection, lookup: SessionLookup) -> bool | None:
+    """Scan one unscanned `external_change` event: queue a linked notice for the task's live
+    assignee session and every live session of the task's label audience (labels, project and
+    superleaders), except the session that made the change. None: nothing to scan.
+    A failed lookup raises and leaves the event unscanned, as in `scan_label_events`."""
+    event = await claim_external_events(conn)
+    if event is None:
+        return None
+    audience: set[str] = set()
+    if event.labels:
+        audience.update(await lookup.live_session_ids(event.labels, event.project))
+    if event.assignee_session:
+        audience.add(event.assignee_session)
+    audience.discard(event.actor_session or "")
+    for session_id in sorted(audience):
+        await enqueue_linked_notice(conn, event.task_id, session_id)
+    await mark_scanned(conn, event.id)
+    return True
+
+
 async def send_next(
     pool: AsyncConnectionPool,
     client: OrchestratorClient,
@@ -204,6 +231,9 @@ async def run_notifier(
                 try:
                     async with pool.connection() as conn:
                         scanned = await scan_label_events(conn, lookup)
+                    async with pool.connection() as conn:
+                        external = await scan_external_events(conn, lookup)
+                    scanned = scanned or external
                     scan_failures = 0
                 except (OrchestratorError, OrchestratorUnavailable) as exc:
                     delay = min(

@@ -57,6 +57,7 @@ def test_applies_twice_idempotent(empty_db_url):
         "0003_decision_withdrawal.sql",
         "0004_specs.sql",
         "0005_plan_steps.sql",
+        "0006_external_changes.sql",
     ]
     assert run_migrations(empty_db_url, PACKAGE) == []
     with psycopg.connect(empty_db_url) as conn:
@@ -235,6 +236,7 @@ def test_migration_backfills_default(empty_db_url):
         "0003_decision_withdrawal.sql",
         "0004_specs.sql",
         "0005_plan_steps.sql",
+        "0006_external_changes.sql",
     ]
     with psycopg.connect(empty_db_url) as conn:
         assert conn.execute("SELECT project FROM tasks").fetchall() == [("default",)]
@@ -300,6 +302,7 @@ def test_legacy_withdrawn_row_survives_check(empty_db_url):
         "0003_decision_withdrawal.sql",
         "0004_specs.sql",
         "0005_plan_steps.sql",
+        "0006_external_changes.sql",
     ]
     with psycopg.connect(empty_db_url) as conn:
         row = conn.execute(
@@ -566,3 +569,27 @@ def test_plan_steps_migration_is_idempotent(conn):
     conn.execute(text)
     conn.execute(text)
     test_plan_steps_schema(conn)
+
+
+def test_external_changes_migration_is_idempotent_and_allows_linked(conn):
+    text = (resources.files(PACKAGE) / "migrations" / "0006_external_changes.sql").read_text()
+    conn.execute(text)
+    conn.execute(text)
+    task = add_task(conn)
+    conn.execute(
+        "INSERT INTO notices (task_id, session_id, reason, status)"
+        " VALUES (%s, 's1', 'linked', 'pending')",
+        (task,),
+    )
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(
+            "INSERT INTO notices (task_id, session_id, reason, status)"
+            " VALUES (%s, 's1', 'linked', 'pending')",
+            (task,),
+        )
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO notices (task_id, session_id, reason, status)"
+            " VALUES (%s, 's2', 'bogus', 'pending')",
+            (task,),
+        )

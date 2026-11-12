@@ -127,8 +127,19 @@ TASKBOARD_DELEGATE_PORT: {{ .Values.components.delegate.port | int | toString | 
 {{- end }}
 {{- end }}
 
-{{/* Container env: the settings ConfigMap and the three secret values. Call with the root context. */}}
+{{- define "agents-taskboard.mindmapEnabled" -}}
+{{- if or (ne (.Values.mindmapTokens | default "") "") .Values.mindmapExistingSecret -}}true{{- end -}}
+{{- end }}
+
+{{- define "agents-taskboard.mindmapRef" -}}
+{{- include "agents-taskboard.secretKeyRef" (dict "ctx" . "existing" .Values.mindmapExistingSecret "key" .Values.mindmapExistingSecretKey "own" "mindmap-tokens" "set" (ne (.Values.mindmapTokens | default "") "") "what" "mindmap tokens") -}}
+{{- end }}
+
+{{/* Container env: the settings ConfigMap and the secret values. Call with (dict "ctx" root
+     "component" name); the mindmap tokens go to the delegate component only. */}}
 {{- define "agents-taskboard.env" -}}
+{{- $component := .component -}}
+{{- with .ctx -}}
 envFrom:
   - configMapRef:
       name: {{ include "agents-taskboard.fullname" . }}-settings
@@ -151,4 +162,11 @@ env:
       secretKeyRef:
         {{- include "agents-taskboard.delegateRef" . | nindent 8 }}
   {{- end }}
+  {{- if and (eq $component "delegate") (include "agents-taskboard.mindmapEnabled" .) }}
+  - name: TASKBOARD_MINDMAP_TOKENS
+    valueFrom:
+      secretKeyRef:
+        {{- include "agents-taskboard.mindmapRef" . | nindent 8 }}
+  {{- end }}
+{{- end }}
 {{- end }}

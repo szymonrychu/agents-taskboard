@@ -2,6 +2,12 @@
 
 Lessons that outlive a session. Newest first.
 
+## 2026-11-12 - external-changes route and linked notices (research-mindmaps task 12)
+
+- "Listening to a task" means the assignee session plus the label audience (live sessions sharing a task label in the task's project, plus superleaders, via `SessionLookup`), minus the `actor_session`. The assignee is added without a liveness check: a dead session answers 404 at send time and the notice ends. A task with no labels has no audience beyond the assignee (the lookup is label-keyed).
+- Deviation from spec 3.7: agents-mindmap gets its own `TASKBOARD_MINDMAP_TOKENS` list, not an entry in the delegate token list, because a delegate token acts as a user on every delegate route (secrets invariant 9: one token, one caller, one verifier). `DelegateGate` (api/external.py) wraps two `ServiceTokenGate` verifiers: the external-changes path takes mindmap tokens (delegate token 403 `forbidden_token`, else 401), every other path delegate tokens only. Settings refuse a mindmap token equal to the relay or a delegate token (message names env vars only). Chart: `TASKBOARD_MINDMAP_TOKENS` is injected into the delegate container only (the shared env helper now takes the component).
+- No new unique index: `notices_one_pending_idx` (task, session, reason where pending) already dedups `linked`; migration 0006 only widens the reason CHECK and adds the unscanned-event partial index. The route is not in `openapi.json` (the web contract); it is documented in the README.
+
 ## 2026-11-11 - plan, steps, deps, next, gate and section routes (T-116 L2)
 
 - One router `api/steps.build_steps_router(actor_dep)` on all three listeners (no user-only plan route); the section route lives in `api/specs.py` next to the other document routes, registered before the catch-all document GET. Writes are scoped in the repository (spec lock), reads call `resolve_spec` first, so every out-of-scope key answers the unknown-key 404 body.

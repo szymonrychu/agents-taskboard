@@ -32,6 +32,18 @@ async def enqueue_label_notice(
     )
 
 
+async def enqueue_linked_notice(
+    conn: psycopg.AsyncConnection, task_id: int, session_id: str
+) -> None:
+    """Queue a regular-lane notice that something linked to the task changed outside the
+    taskboard; a notice already pending for the same task and session absorbs this one."""
+    await conn.execute(
+        "INSERT INTO notices (task_id, session_id, reason, status)"
+        " VALUES (%s, %s, 'linked', 'pending') ON CONFLICT DO NOTHING",
+        (task_id, session_id),
+    )
+
+
 async def enqueue_spec_notice(conn: psycopg.AsyncConnection, spec_id: int, session_id: str) -> None:
     """Queue a regular-lane notice that a spec changed by the user; a notice already pending
     for the same spec and session absorbs this one."""
