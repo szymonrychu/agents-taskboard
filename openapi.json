@@ -766,6 +766,10 @@
       "Gate": {
         "additionalProperties": false,
         "properties": {
+          "approvable": {
+            "title": "Approvable",
+            "type": "boolean"
+          },
           "approved": {
             "title": "Approved",
             "type": "boolean"
@@ -815,6 +819,13 @@
             "title": "Key",
             "type": "string"
           },
+          "open_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/GateOpenDecision"
+            },
+            "title": "Open Decisions",
+            "type": "array"
+          },
           "status": {
             "enum": [
               "draft",
@@ -833,7 +844,9 @@
           "gate_task",
           "decisions",
           "gate",
-          "approved"
+          "approved",
+          "approvable",
+          "open_decisions"
         ],
         "title": "Gate",
         "type": "object"
@@ -868,6 +881,30 @@
           "answer"
         ],
         "title": "GateDecision",
+        "type": "object"
+      },
+      "GateOpenDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "id",
+          "question"
+        ],
+        "title": "GateOpenDecision",
         "type": "object"
       },
       "NextStep": {
@@ -2806,7 +2843,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
           },
           "413": {
             "content": {
@@ -2992,7 +3029,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
           },
           "412": {
             "content": {
@@ -3269,7 +3306,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
           },
           "412": {
             "content": {
@@ -3357,7 +3394,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
           },
           "422": {
             "content": {
@@ -3435,7 +3472,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
           },
           "422": {
             "content": {
@@ -4258,7 +4295,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
           },
           "412": {
             "content": {

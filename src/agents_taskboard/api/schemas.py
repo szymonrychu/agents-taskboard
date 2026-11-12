@@ -432,6 +432,12 @@ class GateDecision(_Strict):
     answer: Any
 
 
+class GateOpenDecision(_Strict):
+    task: str
+    id: int
+    question: str
+
+
 class Gate(_Strict):
     key: str
     status: SpecStatus
@@ -440,6 +446,8 @@ class Gate(_Strict):
     decisions: list[GateDecision]
     gate: Literal["none", "waiting", "open"]
     approved: bool
+    approvable: bool
+    open_decisions: list[GateOpenDecision]
 
 
 class Section(_Strict):

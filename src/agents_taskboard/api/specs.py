@@ -69,6 +69,10 @@ def repo_errors(key: str) -> Iterator[None]:
         raise ApiError(413, "payload_too_large", str(exc) or "over the cap") from None
     except (repo.InvalidPath, repo.InvalidRequest, repo.BadCursor) as exc:
         raise ApiError(422, "invalid_request", str(exc)) from None
+    except repo.DecisionsOpen as exc:
+        raise ApiError(
+            409, "decisions_open", "open decisions on linked tasks", {"decisions": exc.decisions}
+        ) from None
     except repo.UserOnly as exc:
         raise ApiError(403, "user_only", str(exc)) from None
     except repo.AlreadyResolved:
@@ -92,7 +96,7 @@ async def load_spec(request: Request, actor: Actor, key: str) -> dict[str, Any]:
 
 def require_user_or_superleader(actor: Actor, what: str) -> None:
     """Delete and dismiss belong to the user and, alone, to a superleader (scope `*`); accepting
-    a suggestion and approving a spec stay user-only."""
+    a suggestion stays user-only; an agent approves a spec under the decisions rule."""
     if actor.kind != "user" and not actor.is_superleader:
         raise ApiError(403, "superleader_only", f"only the user or a superleader {what}")
 
