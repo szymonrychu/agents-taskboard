@@ -41,6 +41,14 @@ delegateTokens: ""
 delegateExistingSecret: ""
 delegateExistingSecretKey: tokens
 
+# Optional bearer token list of the mindmap caller on the delegate listener (agents-mindmap posts
+# external changes with it). It opens only POST /tasks/{key}/external-changes and is passed to the
+# delegate component only. Comma separated, each different from the relay and delegate tokens.
+# Needs the delegate component. Set at most one of mindmapTokens and mindmapExistingSecret.
+mindmapTokens: ""
+mindmapExistingSecret: ""
+mindmapExistingSecretKey: tokens
+
 # Source CIDRs allowed on the web listener. The oauth2-proxy sidecar (see components.web
 # podAnnotations) reaches it from the pod loopback.
 allowedCidrs:

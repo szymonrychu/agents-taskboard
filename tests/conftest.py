@@ -14,6 +14,7 @@ from agents_taskboard.settings import Settings
 PACKAGE = "agents_taskboard"
 RELAY_TOKEN = "relay-secret"
 DELEGATE_TOKEN = "delegate-secret"
+MINDMAP_TOKEN = "mindmap-secret"
 BASE_URL = "http://test"
 
 
@@ -50,6 +51,7 @@ def settings(db_url: str) -> Settings:
         public_base_url="https://tasks.example.test",
         relay_token=RELAY_TOKEN,
         delegate_tokens=[DELEGATE_TOKEN],
+        mindmap_tokens=[MINDMAP_TOKEN],
     )
 
 

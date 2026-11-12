@@ -59,7 +59,7 @@ spec:
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           command: ["taskboard"]
           args: ["migrate"]
-          {{- include "agents-taskboard.env" $ | nindent 10 }}
+          {{- include "agents-taskboard.env" (dict "ctx" $ "component" "migrate") | nindent 10 }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -73,7 +73,7 @@ spec:
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           command: ["taskboard"]
           args: [{{ index $args $component | quote }}]
-          {{- include "agents-taskboard.env" $ | nindent 10 }}
+          {{- include "agents-taskboard.env" (dict "ctx" $ "component" $component) | nindent 10 }}
           {{- if ne $component "notifier" }}
           ports:
             - name: http

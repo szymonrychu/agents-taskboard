@@ -95,3 +95,33 @@ def test_delegate_port_range(monkeypatch, value):
     with pytest.raises(SettingsError) as exc:
         load_settings()
     assert set(exc.value.problems) == {"TASKBOARD_DELEGATE_PORT"}
+
+
+def test_mindmap_tokens_default_empty_and_secret(monkeypatch):
+    set_env(monkeypatch)
+    assert load_settings().mindmap_tokens == []
+    set_env(monkeypatch, TASKBOARD_MINDMAP_TOKENS="mm-1, mm-2")
+    s = load_settings()
+    assert [t.get_secret_value() for t in s.mindmap_tokens] == ["mm-1", "mm-2"]
+    assert "mm-1" not in repr(s)
+
+
+@pytest.mark.parametrize(
+    ("extra", "clash"),
+    [
+        ({"TASKBOARD_MINDMAP_TOKENS": "relay-secret"}, "TASKBOARD_RELAY_TOKEN"),
+        (
+            {"TASKBOARD_MINDMAP_TOKENS": "x,dlg", "TASKBOARD_DELEGATE_TOKENS": "dlg"},
+            "TASKBOARD_DELEGATE_TOKENS",
+        ),
+    ],
+)
+def test_settings_mindmap_token_distinct(monkeypatch, extra, clash):
+    set_env(monkeypatch, **extra)
+    with pytest.raises(SettingsError) as exc:
+        load_settings()
+    assert "TASKBOARD_MINDMAP_TOKENS" in exc.value.problems
+    message = exc.value.problems["TASKBOARD_MINDMAP_TOKENS"]
+    assert clash in message
+    for value in ("relay-secret", "dlg", "x"):
+        assert value not in message

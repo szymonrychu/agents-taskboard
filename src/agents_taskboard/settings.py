@@ -22,6 +22,7 @@ class Settings(BaseServiceSettings):
     public_base_url: str
     relay_token: SecretStr = Field(repr=False)
     delegate_tokens: Annotated[list[SecretStr], NoDecode] = Field([], repr=False)
+    mindmap_tokens: Annotated[list[SecretStr], NoDecode] = Field([], repr=False)
     delegate_port: int = Field(8003, ge=1, le=65535)
     notifier_poll_seconds: float = Field(5.0, gt=0)
     notifier_backoff_max_seconds: float = Field(60.0, gt=0)
@@ -58,6 +59,11 @@ class Settings(BaseServiceSettings):
         relay = self.relay_token.get_secret_value()
         if any(t.get_secret_value() == relay for t in self.delegate_tokens):
             raise ValueError("TASKBOARD_DELEGATE_TOKENS::must differ from TASKBOARD_RELAY_TOKEN")
+        mindmap = {t.get_secret_value() for t in self.mindmap_tokens}
+        if relay in mindmap:
+            raise ValueError("TASKBOARD_MINDMAP_TOKENS::must differ from TASKBOARD_RELAY_TOKEN")
+        if mindmap & {t.get_secret_value() for t in self.delegate_tokens}:
+            raise ValueError("TASKBOARD_MINDMAP_TOKENS::must differ from TASKBOARD_DELEGATE_TOKENS")
         if self.delegate_port in (self.http_port, self.service_port):
             raise ValueError(
                 "TASKBOARD_DELEGATE_PORT::must differ from TASKBOARD_HTTP_PORT "

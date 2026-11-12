@@ -274,3 +274,44 @@ def _assert_locked_down(dep: dict) -> None:
         assert spec["securityContext"]["runAsNonRoot"] is True
         for c in [*spec["containers"], *spec["initContainers"]]:
             assert c["securityContext"]["readOnlyRootFilesystem"] is True
+
+
+MINDMAP_TOKENS = "".join(["mm", "-", "fixture", "-", "a"])
+
+
+def test_chart_mindmap_tokens_from_secret():
+    docs = render({**WITH_DELEGATE, "mindmapTokens": MINDMAP_TOKENS})
+    assert MINDMAP_TOKENS not in str(of_kind(docs, "ConfigMap"))
+    secrets = {s["metadata"]["name"]: s for s in of_kind(docs, "Secret")}
+    assert secrets["tb-agents-taskboard"]["stringData"]["mindmap-tokens"] == MINDMAP_TOKENS
+    for name, dep in deployments(docs).items():
+        env = env_of(dep["spec"]["template"]["spec"]["containers"][0])
+        if name != "delegate":
+            assert "TASKBOARD_MINDMAP_TOKENS" not in env
+            continue
+        item = env["TASKBOARD_MINDMAP_TOKENS"]
+        assert item["valueFrom"]["secretKeyRef"] == {
+            "name": "tb-agents-taskboard",
+            "key": "mindmap-tokens",
+        }
+        assert "value" not in item
+
+
+def test_chart_mindmap_existing_secret():
+    docs = render({**WITH_DELEGATE, "mindmapExistingSecret": "mm", "mindmapExistingSecretKey": "k"})
+    env = env_of(deployments(docs)["delegate"]["spec"]["template"]["spec"]["containers"][0])
+    assert env["TASKBOARD_MINDMAP_TOKENS"]["valueFrom"]["secretKeyRef"] == {
+        "name": "mm",
+        "key": "k",
+    }
+    assert all("mindmap-tokens" not in (s.get("stringData") or {}) for s in of_kind(docs, "Secret"))
+
+
+def test_chart_mindmap_absent_by_default_and_both_fails():
+    env = env_of(
+        deployments(render(WITH_DELEGATE))["delegate"]["spec"]["template"]["spec"]["containers"][0]
+    )
+    assert "TASKBOARD_MINDMAP_TOKENS" not in env
+    proc = _run(_merge(BASE, {**WITH_DELEGATE, "mindmapTokens": "a", "mindmapExistingSecret": "m"}))
+    assert proc.returncode != 0
+    assert "set only one of the mindmap tokens value" in proc.stderr

@@ -97,3 +97,26 @@ async def mark_scanned(conn: psycopg.AsyncConnection, event_id: int) -> bool:
         "UPDATE events SET scanned_at = now() WHERE id = %s AND scanned_at IS NULL", (event_id,)
     )
     return cur.rowcount == 1
+
+
+@dataclass(frozen=True)
+class ExternalEvent:
+    id: int
+    task_id: int
+    labels: list[str]
+    assignee_session: str | None
+    actor_session: str | None
+    project: str
+
+
+async def claim_external_events(conn: psycopg.AsyncConnection) -> ExternalEvent | None:
+    """Lock the oldest unscanned `external_change` event no other notifier holds, with the task's
+    labels, assignee and project. The caller keeps the transaction open until `mark_scanned`."""
+    cur = await conn.execute(
+        "SELECT e.id, e.task_id, t.labels, t.assignee_session, e.actor_session, t.project"
+        " FROM events e JOIN tasks t ON t.id = e.task_id"
+        " WHERE e.kind = 'external_change' AND e.scanned_at IS NULL"
+        " ORDER BY e.id LIMIT 1 FOR UPDATE OF e SKIP LOCKED"
+    )
+    row = await cur.fetchone()
+    return ExternalEvent(*row) if row else None
