@@ -92,11 +92,11 @@ async def handle_new(
             failed = start.id
         else:
             if nudged is not None and nudged.message_id is not None:
-                await spec_starts.mark_nudged(conn, start.id, owner, nudged.message_id)
-                detail = {"start_id": start.id, "mode": "nudged", "session_id": owner}
-                await append_spec_event(
-                    conn, start.spec_id, AUTOSTART_ACTOR, "implementation_triggered", detail
-                )
+                if await spec_starts.mark_nudged(conn, start.id, owner, nudged.message_id):
+                    detail = {"start_id": start.id, "mode": "nudged", "session_id": owner}
+                    await append_spec_event(
+                        conn, start.spec_id, AUTOSTART_ACTOR, "implementation_triggered", detail
+                    )
             else:
                 position = await spec_starts.enqueue(conn, start.id, owner)
                 detail = {"start_id": start.id, "project": start.project, "position": position}

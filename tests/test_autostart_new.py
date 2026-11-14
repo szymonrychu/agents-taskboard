@@ -169,3 +169,25 @@ async def test_deleted_spec_fails_the_start(pool, conn, fake, client):
         "SELECT status, error FROM spec_starts WHERE id = %s", (start_id,)
     ).fetchone()
     assert status == ("failed", "spec_deleted")
+
+
+async def test_failed_post_retries_later(pool, conn, fake, client):
+    owner = add_session(fake)
+    _, start_id = await new_start(pool, "a", owner)
+    fake.fail_next("post_message", 503)
+    assert await run(pool, client) is False
+    status, _, _, attempts, future = row(conn, start_id)
+    assert (status, attempts, future) == ("new", 1, True)
+    assert not fake.messages
+
+
+async def test_no_trigger_event_when_nudge_not_recorded(pool, conn, fake, client, monkeypatch):
+    owner = add_session(fake)
+    spec_id, start_id = await new_start(pool, "a", owner)
+
+    async def unchanged(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(repo, "mark_nudged", unchanged)
+    assert await run(pool, client) is True
+    assert not events(conn, spec_id, "implementation_triggered")
