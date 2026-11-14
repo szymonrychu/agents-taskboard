@@ -130,7 +130,7 @@ async def test_move_refuses_non_queued(pool):
     async with pool.connection() as conn:
         with pytest.raises(repo.StartNotFound):
             await repo.move(conn, 999999, position=1, before=None)
-    assert await order(pool) == [(two, 2)]
+    assert await order(pool) == [(two, 1)]
 
 
 async def test_move_refuses_both_or_neither(pool):
@@ -154,7 +154,7 @@ async def test_remove_only_queued(pool):
     async with pool.connection() as conn:
         with pytest.raises(repo.StartNotFound):
             await repo.remove(conn, 999999)
-    assert await order(pool) == [(two, 2)]
+    assert await order(pool) == [(two, 1)]
 
 
 async def test_begin_start_guarded(pool):
@@ -172,7 +172,7 @@ async def test_requeue_head_goes_first_and_renumbers_densely(pool):
     async with pool.connection() as conn:
         await repo.begin_start(conn, one, "slug-1", "preset")
         await repo.begin_start(conn, two, "slug-2", "preset")
-    assert await order(pool) == [(three, 3)]
+    assert await order(pool) == [(three, 1)]
     async with pool.connection() as conn:
         assert await repo.requeue_head(conn, two, "usage_refused", datetime.now(UTC)) is True
     assert await order(pool) == [(two, 1), (three, 2)]
@@ -224,7 +224,7 @@ async def test_mark_failed_from_queued_clears_position(pool):
         assert await repo.mark_failed(conn, one, "queued", "no_preset") is True
         assert await repo.mark_failed(conn, one, "queued", "again") is False
     assert await status_of(pool, one) == ("failed", None, None, None, None)
-    assert await order(pool) == [(two, 2)]
+    assert await order(pool) == [(two, 1)]
 
 
 async def test_mark_nudged_and_retry_later(pool):
@@ -322,3 +322,41 @@ async def test_insert_start_skips_when_spec_has_active_row(pool):
         assert await repo.insert_start(conn, spec, 2, "default") is None
         await conn.execute("UPDATE spec_starts SET status = 'failed'")
         assert await repo.insert_start(conn, spec, 3, "default") is not None
+
+
+async def test_leaving_the_queue_from_the_middle_keeps_positions_dense(pool):
+    one, two, three, four = await queued(pool, "p", 4)
+    async with pool.connection() as conn:
+        await repo.remove(conn, two)
+    assert await order(pool) == [(one, 1), (three, 2), (four, 3)]
+    async with pool.connection() as conn:
+        assert await repo.begin_start(conn, three, "slug-3", "preset") is True
+    assert await order(pool) == [(one, 1), (four, 2)]
+    async with pool.connection() as conn:
+        assert await repo.mark_failed(conn, one, "queued", "no_preset") is True
+    assert await order(pool) == [(four, 1)]
+
+
+async def test_drop_unapproved_from_queued_keeps_positions_dense(pool):
+    one, two, three = await queued(pool, "p", 3)
+    async with pool.connection() as conn:
+        assert await repo.drop_unapproved(conn, one, "queued") is True
+    assert await order(pool) == [(two, 1), (three, 2)]
+
+
+async def test_requeue_after_a_middle_start_stays_dense(pool):
+    one, two, three = await queued(pool, "p", 3)
+    async with pool.connection() as conn:
+        await repo.begin_start(conn, two, "slug-2", "preset")
+    assert await order(pool) == [(one, 1), (three, 2)]
+    async with pool.connection() as conn:
+        assert await repo.requeue_head(conn, two, "usage_refused", datetime.now(UTC)) is True
+    assert await order(pool) == [(two, 1), (one, 2), (three, 3)]
+
+
+async def test_failure_of_an_in_progress_row_does_not_touch_the_queue(pool):
+    one, two = (await queued(pool, "p", 2))[:2]
+    async with pool.connection() as conn:
+        await repo.begin_start(conn, one, "slug-1", "preset")
+        assert await repo.mark_failed(conn, one, "in_progress", "boom") is True
+    assert await order(pool) == [(two, 1)]

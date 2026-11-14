@@ -165,7 +165,11 @@ async def drop_unapproved(conn: psycopg.AsyncConnection, start_id: int, from_sta
         " WHERE id = %s AND status = %s",
         (start_id, from_status),
     )
-    return cur.rowcount == 1
+    if cur.rowcount != 1:
+        return False
+    if from_status == "queued":
+        await _renumber(conn, project)
+    return True
 
 
 async def claim_new(conn: psycopg.AsyncConnection) -> SpecStart | None:
@@ -256,13 +260,21 @@ async def set_hold(conn: psycopg.AsyncConnection, start_id: int, reason: str | N
 async def begin_start(
     conn: psycopg.AsyncConnection, start_id: int, slug: str, preset_id: str
 ) -> bool:
-    """Take the queued row out of the queue (it can no longer be moved or removed)."""
+    """Take the queued row out of the queue (it can no longer be moved or removed) and
+    renumber the project's remaining queue densely 1..n."""
+    project = await _project_of(conn, start_id)
+    if project is None:
+        return False
+    await lock_queue(conn, project)
     cur = await conn.execute(
         "UPDATE spec_starts SET status = 'in_progress', position = NULL, hold_reason = NULL,"
         " slug = %s, preset_id = %s, updated_at = now() WHERE id = %s AND status = 'queued'",
         (slug, preset_id, start_id),
     )
-    return cur.rowcount == 1
+    if cur.rowcount != 1:
+        return False
+    await _renumber(conn, project)
+    return True
 
 
 async def requeue_head(
@@ -334,20 +346,30 @@ class SpecStartStore:
 async def mark_failed(
     conn: psycopg.AsyncConnection, start_id: int, from_status: str, error: str
 ) -> bool:
+    project = None
+    if from_status == "queued":
+        project = await _project_of(conn, start_id)
+        if project is None:
+            return False
+        await lock_queue(conn, project)
     cur = await conn.execute(
         "UPDATE spec_starts SET status = 'failed', position = NULL, error = %s,"
         " hold_reason = NULL, finished_at = now(), updated_at = now()"
         " WHERE id = %s AND status = %s",
         (error, start_id, from_status),
     )
-    return cur.rowcount == 1
+    if cur.rowcount != 1:
+        return False
+    if project is not None:
+        await _renumber(conn, project)
+    return True
 
 
 async def list_queue(
     conn: psycopg.AsyncConnection, actor: Actor, project: str | None
 ) -> list[dict[str, Any]]:
     """Queued starts the actor may see, optionally of one project, in queue order. `rank` is the
-    displayed 1..n place among the project's queued rows (positions may have gaps)."""
+    displayed 1..n place among the project's queued rows (positions are kept dense)."""
     scope, params = scoped(actor, "q.project")
     where = " AND q.project = %s" if project is not None else ""
     if project is not None:
@@ -435,6 +457,7 @@ async def remove(conn: psycopg.AsyncConnection, start_id: int) -> int:
     row = await cur.fetchone()
     if row is None:
         raise NotQueued(start_id)
+    await _renumber(conn, project)
     return row[0]
 
 

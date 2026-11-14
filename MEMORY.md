@@ -195,3 +195,4 @@ agents-common `listen` reconnects only on OperationalError/OSError; any other ex
   stale row must not start an unapproved spec.
 - retry_later caps the backoff exponent (`power(2, least(attempts, 30))`, as notices.py) so a long
   outage does not overflow.
+- 2026-11-14: every transition that takes a row out of the queued set (remove, begin_start, mark_failed and drop_unapproved from queued) renumbers the project's queue densely 1..n via _renumber in the same transaction under lock_queue. Why: nulling a position left gaps and the web showed "Queued #4" for the 2nd in line. list_queue keeps its row_number rank as a cheap safety net (not trivially removable: it also serves row subsets). (S-51)
