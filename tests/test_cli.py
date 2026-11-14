@@ -36,6 +36,7 @@ def test_migrate_applies_and_prints_names(monkeypatch, empty_db_url, capsys):
         "0004_specs.sql",
         "0005_plan_steps.sql",
         "0006_external_changes.sql",
+        "0007_spec_autostart.sql",
     ]
     assert main(["migrate"]) == 0
     assert capsys.readouterr().out == ""

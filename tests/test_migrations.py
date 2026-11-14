@@ -58,6 +58,7 @@ def test_applies_twice_idempotent(empty_db_url):
         "0004_specs.sql",
         "0005_plan_steps.sql",
         "0006_external_changes.sql",
+        "0007_spec_autostart.sql",
     ]
     assert run_migrations(empty_db_url, PACKAGE) == []
     with psycopg.connect(empty_db_url) as conn:
@@ -237,6 +238,7 @@ def test_migration_backfills_default(empty_db_url):
         "0004_specs.sql",
         "0005_plan_steps.sql",
         "0006_external_changes.sql",
+        "0007_spec_autostart.sql",
     ]
     with psycopg.connect(empty_db_url) as conn:
         assert conn.execute("SELECT project FROM tasks").fetchall() == [("default",)]
@@ -303,6 +305,7 @@ def test_legacy_withdrawn_row_survives_check(empty_db_url):
         "0004_specs.sql",
         "0005_plan_steps.sql",
         "0006_external_changes.sql",
+        "0007_spec_autostart.sql",
     ]
     with psycopg.connect(empty_db_url) as conn:
         row = conn.execute(
@@ -593,3 +596,52 @@ def test_external_changes_migration_is_idempotent_and_allows_linked(conn):
             " VALUES (%s, 's2', 'bogus', 'pending')",
             (task,),
         )
+
+
+def add_start(conn, spec, **cols) -> int:
+    values = {"spec_id": spec, "approval_event_id": 1, "ordinal": 1, "project": "default", **cols}
+    names = ", ".join(values)
+    marks = ", ".join(["%s"] * len(values))
+    return conn.execute(
+        f"INSERT INTO spec_starts ({names}) VALUES ({marks}) RETURNING id", tuple(values.values())
+    ).fetchone()[0]
+
+
+def test_spec_starts_unique_per_approval_event(conn):
+    spec = add_spec(conn)
+    add_start(conn, spec)
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        add_start(conn, spec, ordinal=2)
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        add_start(conn, spec, approval_event_id=2)
+    add_start(conn, spec, approval_event_id=2, ordinal=2)
+
+
+def test_queued_needs_position(conn):
+    spec = add_spec(conn)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_start(conn, spec, status="queued")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_start(conn, spec, status="new", position=1)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_start(conn, spec, status="bogus")
+    add_start(conn, spec, status="queued", position=1)
+
+
+def test_project_settings_bounds(conn):
+    insert = (
+        "INSERT INTO project_settings (project, max_active_sessions, max_usage_pct)"
+        " VALUES (%s, %s, %s)"
+    )
+    for bad in ((0, 50), (1, 0), (1, 101)):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute(insert, ("p", *bad))
+    conn.execute(insert, ("p", 1, 100))
+    conn.execute(insert, ("q", None, None))
+
+
+def test_spec_autostart_migration_is_idempotent(conn):
+    text = (resources.files(PACKAGE) / "migrations" / "0007_spec_autostart.sql").read_text()
+    conn.execute(text)
+    conn.execute(text)
+    assert "preset_id" in columns(conn, "specs")
