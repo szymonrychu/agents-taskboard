@@ -325,6 +325,12 @@ async def create_spec(
         return spec, True
 
 
+async def has_replay(conn: psycopg.AsyncConnection, actor: Actor, client_key: str) -> bool:
+    """True when this actor already created a spec with `client_key` (a short read)."""
+    async with conn.transaction():
+        return await _replayed_spec(conn, actor, client_key) is not None
+
+
 async def _replayed_spec(
     conn: psycopg.AsyncConnection, actor: Actor, client_key: str
 ) -> int | None:

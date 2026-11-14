@@ -372,3 +372,39 @@ async def test_create_succeeds_when_orchestrator_down(service_client, fake_orch)
     fake_orch.fail_next("list_presets", 503)
     spec = await make_spec(service_client)
     assert spec["preset_id"] is None
+
+
+async def test_client_key_replay_skips_lookup_and_keeps_preset(service_client, fake_orch):
+    ref = fake_orch.add_preset("p")
+    fake_orch.sessions[S1] = {
+        "id": S1,
+        "slug": "mx-1",
+        "preset_id": str(ref.id),
+        "project": "default",
+    }
+    first = await make_spec(service_client, client_key="rk")
+    lookup = service_client.app.state.presets
+    calls = []
+    real = lookup.for_new_spec
+
+    async def spy(*args):
+        calls.append(args)
+        return await real(*args)
+
+    lookup.for_new_spec = spy
+    other = fake_orch.add_preset("q")
+    fake_orch.sessions[S1]["preset_id"] = str(other.id)
+    again = await make_spec_replay(service_client)
+    assert calls == []
+    assert again["key"] == first["key"]
+    assert again["preset_id"] == str(ref.id)
+
+
+async def make_spec_replay(client) -> dict:
+    r = await client.post(
+        SPECS,
+        json={"name": "plan-a", "title": "A plan", "client_key": "rk"},
+        headers=agent(),
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
