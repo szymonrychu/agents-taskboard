@@ -292,6 +292,7 @@ class SpecSummary(_Strict):
     assignee_session: str | None
     assignee_slug: str | None
     created_by: ActorRef | None
+    preset_id: str | None
     version: int
     created_at: Timestamp
     updated_at: Timestamp

@@ -1484,6 +1484,17 @@
             "title": "Open Comments",
             "type": "integer"
           },
+          "preset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preset Id"
+          },
           "project": {
             "title": "Project",
             "type": "string"
@@ -1533,6 +1544,7 @@
           "assignee_session",
           "assignee_slug",
           "created_by",
+          "preset_id",
           "version",
           "created_at",
           "updated_at",
@@ -1775,6 +1787,17 @@
             "title": "Name",
             "type": "string"
           },
+          "preset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preset Id"
+          },
           "project": {
             "title": "Project",
             "type": "string"
@@ -1817,6 +1840,7 @@
           "assignee_session",
           "assignee_slug",
           "created_by",
+          "preset_id",
           "version",
           "created_at",
           "updated_at",

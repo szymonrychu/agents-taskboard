@@ -109,7 +109,7 @@ def _by(prefix: str, row: dict[str, Any]) -> dict[str, Any] | None:
 _SPEC_COLUMNS = (
     "s.id, s.project, s.name, s.title, s.status, s.labels, s.assignee_session,"
     " s.assignee_slug, s.created_by_kind, s.created_by_session, s.created_by_slug, s.version,"
-    " s.created_at, s.updated_at"
+    " s.created_at, s.updated_at, s.preset_id"
 )
 _VERSION_COLUMNS = (
     "v.path, v.version, v.sha256, v.size, v.note, v.sources, v.created_by_kind,"
@@ -255,6 +255,7 @@ async def create_spec(
     labels: list[str],
     client_key: str | None,
     docs: list[dict[str, Any]],
+    preset_id: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Create a spec with its first documents (each at version 1); returns (spec, created). A
     replayed (creator, client_key) returns the stored spec with created False. Raises NameTaken,
@@ -280,9 +281,19 @@ async def create_spec(
                 return spec, False
         cur = await conn.execute(
             "INSERT INTO specs (project, name, title, labels, created_by_kind,"
-            " created_by_session, created_by_slug, client_key)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING id",
-            (project, name, title, labels, actor.kind, actor.session_id, actor.slug, client_key),
+            " created_by_session, created_by_slug, client_key, preset_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING id",
+            (
+                project,
+                name,
+                title,
+                labels,
+                actor.kind,
+                actor.session_id,
+                actor.slug,
+                client_key,
+                preset_id,
+            ),
         )
         row = await cur.fetchone()
         if row is None:

@@ -2,11 +2,15 @@
 
 import hashlib
 
+import httpx
 import pytest
+from agents_common.fake_orchestrator import FakeOrchestrator
+from agents_common.orchestrator import OrchestratorClient
 from test_api_tasks import S1, S2, agent
 from test_scope import ORCH, orchestrator
 
 from agents_taskboard.api.app import PREFIX
+from agents_taskboard.presets import PresetLookup
 from agents_taskboard.projects import ProjectLookup
 
 SPECS = f"{PREFIX}/specs"
@@ -17,6 +21,19 @@ CAP = 192 * 1024
 def fake_projects(service_client, web_client, delegate_client):
     for client in (service_client, web_client, delegate_client):
         client.app.state.projects = ProjectLookup(ORCH, "t", transport=orchestrator())
+
+
+@pytest.fixture(autouse=True)
+async def fake_orch(service_client, web_client, delegate_client):
+    fake = FakeOrchestrator()
+    client = OrchestratorClient(
+        "http://orch.test", fake.token, transport=httpx.ASGITransport(app=fake.app)
+    )
+    lookup = PresetLookup(client)
+    for c in (service_client, web_client, delegate_client):
+        c.app.state.presets = lookup
+    yield fake
+    await lookup.aclose()
 
 
 async def make_spec(client, headers=None, **body) -> dict:
@@ -326,3 +343,32 @@ async def test_unknown_and_malformed_keys_404(web_client):
     for key in ("S-999999", "S-x", "T-1"):
         r = await web_client.get(f"{SPECS}/{key}")
         assert r.status_code == 404 and r.json()["error"]["code"] == "not_found"
+
+
+async def test_agent_create_records_session_preset(service_client, fake_orch):
+    ref = fake_orch.add_preset("p")
+    fake_orch.sessions[S1] = {
+        "id": S1,
+        "slug": "mx-1",
+        "preset_id": str(ref.id),
+        "project": "default",
+    }
+    spec = await make_spec(service_client)
+    assert spec["preset_id"] == str(ref.id)
+    r = await service_client.get(f"{SPECS}/{spec['key']}", headers=agent())
+    assert r.json()["preset_id"] == str(ref.id)
+
+
+async def test_user_create_records_project_default_or_null(web_client, fake_orch):
+    spec = await make_spec(web_client, headers={}, name="plan-u1")
+    assert spec["preset_id"] is None
+    ref = fake_orch.add_preset("def", is_default=True)
+    spec = await make_spec(web_client, headers={}, name="plan-u2")
+    assert spec["preset_id"] == str(ref.id)
+
+
+async def test_create_succeeds_when_orchestrator_down(service_client, fake_orch):
+    fake_orch.fail_next("get_session", 503)
+    fake_orch.fail_next("list_presets", 503)
+    spec = await make_spec(service_client)
+    assert spec["preset_id"] is None
