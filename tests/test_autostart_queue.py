@@ -323,6 +323,24 @@ async def test_gone_preset_fails_the_start(pool, conn, fake, client, presets):
     ]
 
 
+@pytest.mark.parametrize("status", [400, 403, 422])
+async def test_permanent_4xx_on_create_fails_the_start(
+    pool, conn, fake, client, presets, preset, status
+):
+    spec_id, a, _ = await queued(pool, "a", preset)
+    _, b, _ = await queued(pool, "a2", preset)
+    await configure(pool, "a", 2, 90)
+    fake.fail_next("create_session", status)
+    assert await run(pool, client, presets) is True
+    assert row(conn, a)[0] == "failed"
+    assert row(conn, a)[4] is not None
+    assert row(conn, a)[4] != "orchestrator_unavailable"
+    (detail,) = events(conn, spec_id, "implementation_trigger_failed")
+    assert detail["start_id"] == a
+    await run(pool, client, presets)
+    assert row(conn, b)[0] != "queued"
+
+
 async def test_usage_refusal_requeues_at_head(pool, conn, fake, client, presets, preset):
     _, a, _ = await queued(pool, "a", preset)
     _, b, _ = await queued(pool, "b", preset)

@@ -208,7 +208,17 @@ async def _dispatch_start(
             (error,) = await cur.fetchone() or ("not_found",)
             await _trigger_failed(conn, start, error)
         return True
-    except (OrchestratorError, OrchestratorUnavailable) as exc:
+    except OrchestratorError as exc:
+        # a permanent 4xx (422 unknown project, 400, 403) never succeeds on retry and would block
+        # the project's queue at the head: fail the start instead
+        error = exc.code or "orchestrator_rejected"
+        log.warning("spec start %s: orchestrator rejected the start: %s", start.id, exc)
+        async with pool.connection() as conn:
+            if not await spec_starts.mark_failed(conn, start.id, "in_progress", error):
+                return False
+            await _trigger_failed(conn, start, error)
+        return True
+    except OrchestratorUnavailable as exc:
         log.warning("spec start %s: orchestrator failed, will retry: %s", start.id, exc)
         async with pool.connection() as conn:
             moved = await spec_starts.requeue_head(conn, start.id, "orchestrator_unavailable", now)
