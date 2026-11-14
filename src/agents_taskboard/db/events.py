@@ -48,11 +48,13 @@ async def append_spec_event(
     actor: Actor,
     kind: str,
     detail: dict[str, Any] | None = None,
-) -> None:
-    """Log one event of the spec (no task), stamped with the spec's current project."""
-    await conn.execute(
+) -> int:
+    """Log one event of the spec (no task), stamped with the spec's current project; returns the
+    event id."""
+    cur = await conn.execute(
         "INSERT INTO events (spec_id, project, actor_kind, actor_session, actor_slug, kind,"
-        " detail) SELECT s.id, s.project, %s, %s, %s, %s, %s FROM specs s WHERE s.id = %s",
+        " detail) SELECT s.id, s.project, %s, %s, %s, %s, %s FROM specs s WHERE s.id = %s"
+        " RETURNING id",
         (
             actor.kind,
             actor.session_id,
@@ -62,6 +64,7 @@ async def append_spec_event(
             spec_id,
         ),
     )
+    return (await cur.fetchone())[0]
 
 
 async def notify_spec_changed(conn: psycopg.AsyncConnection, spec_id: int) -> None:

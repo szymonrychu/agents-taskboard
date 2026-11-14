@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from agents_common.db import listen
+from agents_common.orchestrator import OrchestratorClient
 from agents_common.service_gate import EXEMPT_PATHS, ServiceTokenGate
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -19,6 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from agents_taskboard.api.actors import actor_from_service, actor_from_web
+from agents_taskboard.api.autostart import build_autostart_router
 from agents_taskboard.api.decisions import build_router as build_decision_router
 from agents_taskboard.api.errors import ApiError, error_response
 from agents_taskboard.api.external import DelegateGate, build_external_router
@@ -29,6 +31,7 @@ from agents_taskboard.api.stream import DEFAULT_POLL_SECONDS, ListenFn, TaskChan
 from agents_taskboard.api.stream import build_router as build_stream_router
 from agents_taskboard.api.tasks import build_router
 from agents_taskboard.api.todos import build_router as build_todo_router
+from agents_taskboard.presets import PresetLookup
 from agents_taskboard.projects import ProjectLookup
 from agents_taskboard.settings import Settings
 
@@ -78,6 +81,11 @@ def _base_app(settings: Settings, pool: AsyncConnectionPool, title: str) -> Fast
     app.state.projects = ProjectLookup(
         settings.orchestrator_url, settings.orchestrator_token.get_secret_value()
     )
+    app.state.presets = PresetLookup(
+        OrchestratorClient(
+            settings.orchestrator_url, settings.orchestrator_token.get_secret_value()
+        )
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -85,6 +93,7 @@ def _base_app(settings: Settings, pool: AsyncConnectionPool, title: str) -> Fast
             yield
         finally:
             await app.state.projects.aclose()
+            await app.state.presets.aclose()
 
     app.router.lifespan_context = lifespan
 
@@ -144,6 +153,7 @@ def _user_app(
         finally:
             await app.state.hub.stop()
             await app.state.projects.aclose()
+            await app.state.presets.aclose()
 
     app.router.lifespan_context = lifespan
     app.include_router(build_stream_router(), prefix=PREFIX)
@@ -151,6 +161,7 @@ def _user_app(
     app.include_router(build_todo_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_decision_router(actor_from_web, answerable=True), prefix=PREFIX)
     app.include_router(build_projects_router(actor_from_web), prefix=PREFIX)
+    app.include_router(build_autostart_router(actor_from_web, user_routes=True), prefix=PREFIX)
     app.include_router(build_spec_router(actor_from_web, user_routes=True), prefix=PREFIX)
     app.include_router(build_steps_router(actor_from_web), prefix=PREFIX)
     add_gate(app)
@@ -203,6 +214,7 @@ def create_service_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI
     app.include_router(build_todo_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_decision_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_projects_router(actor_from_service), prefix=PREFIX)
+    app.include_router(build_autostart_router(actor_from_service, user_routes=False), prefix=PREFIX)
     app.include_router(build_spec_router(actor_from_service, user_routes=False), prefix=PREFIX)
     app.include_router(build_steps_router(actor_from_service), prefix=PREFIX)
     app.add_middleware(ServiceTokenGate, tokens=[settings.relay_token.get_secret_value()])

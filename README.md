@@ -47,6 +47,9 @@ Every process reads one validated `TASKBOARD_*` environment. A bad or missing va
 | `TASKBOARD_SERVICE_PORT` | `8001` | service listener port (the chart sets 8002) |
 | `TASKBOARD_NOTIFIER_POLL_SECONDS` | `5` | notifier poll interval and base retry delay |
 | `TASKBOARD_NOTIFIER_BACKOFF_MAX_SECONDS` | `60` | cap of the per-notice retry delay |
+| `TASKBOARD_USAGE_URL` | empty | absolute http(s) base of agents-usage (`GET /usage/v1/current`) for the autostart usage gate; empty means no source and every gate reads usage_unknown; needs `TASKBOARD_USAGE_TOKEN` |
+| `TASKBOARD_USAGE_TOKEN` | empty | bearer token for agents-usage; required when the URL is set; the chart passes it to the notifier only |
+| `TASKBOARD_USAGE_CACHE_SECONDS` | `30` | how long a usage answer, or a failure, is cached |
 | `TASKBOARD_LOG_LEVEL` | `INFO` | log level |
 | `TASKBOARD_SHUTDOWN_GRACE_SECONDS` | `20` | graceful shutdown wait |
 
@@ -204,13 +207,37 @@ The first ready step in order: `claim` (default false) also makes the caller its
 
 The spec's human gate: `{key, status, approved_versions, gate_task, decisions, gate, approved, approvable, open_decisions}`. The gate task is the improvement's own task linked to the spec: its lowest-id task that is not a step and not dropped (`null` when there is none). `decisions` are that task's decisions other than withdrawn ones (`[{id, question, status, answer}]`); `gate` is `none` with no such decision, `waiting` while one is open and `open` when all are answered. `approved` is `status == "approved"` and does not gate execution; `approved_versions` maps each document to the version the user approved (null unless approved). `approvable` is true when no decision on the spec's open or in_progress linked tasks is open; `open_decisions` lists those (`[{task, id, question}]`, task id then decision id), so an agent can approve exactly when `approvable` is true. The workbench rule gates implementation on an approved spec.
 
+### `GET /taskboard/api/v1/specs/queue`
+
+The spec start queue per project (`?project=<slug>` narrows it; an agent sees only its projects, a superleader and the user all): `{projects: [{project, max_active_sessions, max_usage_pct, state, items}]}`, one entry per project that has queued starts or a settings row. `items` are `{id, spec, title, position, ordinal, hold_reason, created_at}` in queue order; `position` is the displayed rank 1..n. `state` is `off` (a limit is unset), `idle` (configured, nothing queued), else the head's hold (`at_limit`, `usage_high`, `usage_unknown`, `usage_refused`, `orchestrator_unavailable`) or `ready`. Declared before `/specs/{key}` so the key route does not capture it.
+
+### `POST /taskboard/api/v1/specs/queue/{start_id}/move`
+
+Body `{"position": n}` (1-based rank, clamped) or `{"before": <start id>}`, exactly one (`422 invalid_request` otherwise or when `before` is not a queued start of the same project). Answers the project's queue. The user or a superleader; any other agent gets `403 superleader_only`. `404 not_found` outside the actor's projects, `409 not_queued` when the start already started or was removed. Logs the spec event `implementation_queue_moved`.
+
+### `DELETE /taskboard/api/v1/specs/queue/{start_id}`
+
+Take a queued start out of the queue for good (web and delegate listeners, the user; the service listener has no such route). `204`, `409 not_queued`; logs `implementation_trigger_removed`.
+
+### `GET /taskboard/api/v1/projects/{slug}/autostart`
+
+The project's autostart limits (web and delegate listeners): `{project, max_active_sessions, max_usage_pct, configured, updated_at}`; an unconfigured project returns nulls, `configured: false` and `updated_at: null`. No defaults: autostart is off until both limits are set.
+
+### `PUT /taskboard/api/v1/projects/{slug}/autostart`
+
+Body `{"max_active_sessions": 1..1000 | null, "max_usage_pct": 1..100 | null}`, both keys required, null unsets. `422 invalid_request` for a bad value, `422 unknown_project` / `project_archived`, `503 upstream_unavailable` (checked with the orchestrator except for `default`). Answers the view above and wakes the notifier.
+
 ### `GET /taskboard/api/v1/stream`
 
 Server-sent events (web and delegate listeners): `task_changed` with data `{"key": "T-5", "project": "default"}` whenever a task changes, and `spec_changed` with data `{"key": "S-2", "project": "default"}` plus, when the change has them, `path` and `version` (a document version), `comment_id` (a comment or a decided suggestion) and `deleted: true` (the spec was deleted). Every event carries `id: <n>`, the id of the event row that caused it. The optional `project` query parameter delivers only that project's changes. Catch-up: reconnect with the `Last-Event-ID` header or the `after_id` query parameter (the larger wins when both are given; a header that is not a number is ignored) and the stream first sends, in id order, one event per task or spec changed after that id, then the live feed. When the id is below the oldest kept event row it sends one `reset` event (data `{}`, `id` the newest row) instead: refetch the lists. A NOTIFY only wakes the stream; it also polls every 5 seconds, and a client refetches what changed.
 
 ### Errors
 
-Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open`, `name_taken`, `already_resolved`, `already_decided`, `step_in_progress` and `decisions_open` (409), `stale_version` (412, on a document or the plan header with `current_version`, on the steps with `current_steps_version`), `payload_too_large` (413), `invalid_request`, `no_suggestion`, `dependency_cycle`, `project_mismatch`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
+Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `superleader_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open`, `name_taken`, `already_resolved`, `already_decided`, `step_in_progress`, `decisions_open` and `not_queued` (409), `stale_version` (412, on a document or the plan header with `current_version`, on the steps with `current_steps_version`), `payload_too_large` (413), `invalid_request`, `no_suggestion`, `dependency_cycle`, `project_mismatch`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
+
+## Spec autostart
+
+Approving a spec records one start per approval (`starts` on the spec detail, newest first, at most 10: `{id, ordinal, status, mode, project, position, hold_reason, slug, session_id, error, created_at, updated_at}`). A live spec owner is nudged; otherwise the start is queued per project and the notifier starts an implementation session when the project's limits allow. States of a project queue: `off`, `idle`, `ready`, `at_limit`, `usage_high`, `usage_unknown`, `usage_refused`, `orchestrator_unavailable`. Rights: every actor reads the queue within its projects; the user and a superleader reorder it; only the user removes a start and sets the limits (web and delegate listeners only).
 
 ## Notices
 

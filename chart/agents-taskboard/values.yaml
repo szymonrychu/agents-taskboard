@@ -27,6 +27,14 @@ orchestrator:
   existingSecret: ""
   existingSecretKey: token
 
+# Optional agents-usage source of the autostart usage gate (notifier only). Empty url: no source,
+# every gate reads usage_unknown. With a url set exactly one of token and existingSecret.
+usage:
+  url: ""
+  token: ""
+  existingSecret: ""
+  existingSecretKey: token
+
 # Bearer token of the service listener (the orchestrator relay sends it). Set exactly one of
 # relayToken and relayExistingSecret.
 relayToken: ""

@@ -143,7 +143,14 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
     ) -> dict[str, Any]:
         project = body.project or actor.default_project()
         await require_target(request, actor, project)
+        preset_id = None
         with repo_errors(body.name):
+            async with pool_of(request).connection() as conn:
+                replay = body.client_key is not None and await repo.has_replay(
+                    conn, actor, body.client_key
+                )
+            if not replay:
+                preset_id = await request.app.state.presets.for_new_spec(actor.session_id, project)
             async with pool_of(request).connection() as conn:
                 spec, created = await repo.create_spec(
                     conn,
@@ -154,6 +161,7 @@ def build_spec_router(actor_dep: Callable[..., Actor], *, user_routes: bool) -> 
                     labels=body.labels,
                     client_key=body.client_key,
                     docs=[d.model_dump() for d in body.docs],
+                    preset_id=preset_id,
                 )
         if not created:
             response.status_code = 200

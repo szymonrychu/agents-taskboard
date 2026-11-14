@@ -292,16 +292,36 @@ class SpecSummary(_Strict):
     assignee_session: str | None
     assignee_slug: str | None
     created_by: ActorRef | None
+    preset_id: str | None
     version: int
     created_at: Timestamp
     updated_at: Timestamp
     url: str
 
 
+class SpecStartView(_Strict):
+    """One approval's start record: `status` is new, queued, in_progress, handled, failed or
+    removed; `mode` is nudged or started once handled."""
+
+    id: int
+    ordinal: int
+    status: str
+    mode: str | None
+    project: str
+    position: int | None
+    hold_reason: str | None
+    slug: str | None
+    session_id: str | None
+    error: str | None
+    created_at: Timestamp
+    updated_at: Timestamp
+
+
 class SpecDetail(SpecSummary):
     documents: list[SpecDocument]
     tasks: list[str]
     open_comments: int
+    starts: list[SpecStartView]
 
 
 class SpecPage(_Strict):
@@ -456,3 +476,69 @@ class Section(_Strict):
     heading: str
     body: str
     truncated: bool
+
+
+# Spec autostart (S-51): the start queue, its per-project state and the limits.
+
+AutostartState = Literal[
+    "off",
+    "idle",
+    "ready",
+    "at_limit",
+    "usage_high",
+    "usage_unknown",
+    "usage_refused",
+    "orchestrator_unavailable",
+]
+
+
+class QueueItem(_Strict):
+    """A queued start; `position` is the displayed rank 1..n within the project."""
+
+    id: int
+    spec: str
+    title: str
+    position: int
+    ordinal: int
+    hold_reason: str | None
+    created_at: Timestamp
+
+
+class ProjectQueue(_Strict):
+    project: str
+    max_active_sessions: int | None
+    max_usage_pct: int | None
+    state: AutostartState
+    items: list[QueueItem]
+
+
+class SpecQueue(_Strict):
+    projects: list[ProjectQueue]
+
+
+class QueueMove(_Strict):
+    """Move to the 1-based rank `position` or just before the queued start `before` (one)."""
+
+    position: int | None = Field(default=None, ge=1)
+    before: int | None = None
+
+    @model_validator(mode="after")
+    def _one_target(self) -> Self:
+        if (self.position is None) == (self.before is None):
+            raise ValueError("give exactly one of position and before")
+        return self
+
+
+class AutostartPut(_Strict):
+    """Both keys are required; null unsets a limit (autostart stays off until both are set)."""
+
+    max_active_sessions: Annotated[int, Field(ge=1, le=1000)] | None
+    max_usage_pct: Annotated[int, Field(ge=1, le=100)] | None
+
+
+class AutostartView(_Strict):
+    project: str
+    max_active_sessions: int | None
+    max_usage_pct: int | None
+    configured: bool
+    updated_at: Timestamp | None

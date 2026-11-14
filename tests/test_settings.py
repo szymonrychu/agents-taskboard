@@ -125,3 +125,28 @@ def test_settings_mindmap_token_distinct(monkeypatch, extra, clash):
     assert clash in message
     for value in ("relay-secret", "dlg", "x"):
         assert value not in message
+
+
+def test_usage_defaults_empty(monkeypatch):
+    set_env(monkeypatch)
+    s = load_settings()
+    assert s.usage_url == ""
+    assert s.usage_token.get_secret_value() == ""
+    assert s.usage_cache_seconds == 30.0
+
+
+def test_usage_url_requires_token(monkeypatch):
+    set_env(monkeypatch, TASKBOARD_USAGE_URL="http://usage.test")
+    with pytest.raises(SettingsError) as exc:
+        load_settings()
+    assert "TASKBOARD_USAGE_TOKEN" in str(exc.value)
+    set_env(monkeypatch, TASKBOARD_USAGE_URL="usage.test", TASKBOARD_USAGE_TOKEN="usage-secret")
+    with pytest.raises(SettingsError) as exc:
+        load_settings()
+    assert "TASKBOARD_USAGE_URL" in str(exc.value)
+    set_env(
+        monkeypatch, TASKBOARD_USAGE_URL="http://usage.test/", TASKBOARD_USAGE_TOKEN="usage-secret"
+    )
+    s = load_settings()
+    assert s.usage_url == "http://usage.test"
+    assert "usage-secret" not in repr(s)

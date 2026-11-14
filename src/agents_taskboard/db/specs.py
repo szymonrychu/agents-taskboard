@@ -109,11 +109,27 @@ def _by(prefix: str, row: dict[str, Any]) -> dict[str, Any] | None:
 _SPEC_COLUMNS = (
     "s.id, s.project, s.name, s.title, s.status, s.labels, s.assignee_session,"
     " s.assignee_slug, s.created_by_kind, s.created_by_session, s.created_by_slug, s.version,"
-    " s.created_at, s.updated_at"
+    " s.created_at, s.updated_at, s.preset_id"
 )
 _VERSION_COLUMNS = (
     "v.path, v.version, v.sha256, v.size, v.note, v.sources, v.created_by_kind,"
     " v.created_by_session, v.created_by_slug, v.created_at"
+)
+
+
+START_FIELDS = (
+    "id",
+    "ordinal",
+    "status",
+    "mode",
+    "project",
+    "position",
+    "hold_reason",
+    "slug",
+    "session_id",
+    "error",
+    "created_at",
+    "updated_at",
 )
 
 
@@ -161,6 +177,11 @@ async def get_spec(
         (spec_id,),
     )
     spec["open_comments"] = (await cur.fetchone())[0]
+    from agents_taskboard.db.spec_starts import starts_of_spec  # spec_starts imports this module
+
+    spec["starts"] = [
+        {k: row[k] for k in START_FIELDS} for row in await starts_of_spec(conn, spec_id)
+    ]
     return spec
 
 
@@ -172,6 +193,28 @@ async def _notify_owner(conn: psycopg.AsyncConnection, actor: Actor, spec: dict[
     target = spec["assignee_session"] or spec["created_by_session"]
     if target is not None:
         await enqueue_spec_notice(conn, spec["id"], target)
+
+
+async def spec_owner(
+    conn: psycopg.AsyncConnection,
+    spec_id: int,
+    assignee_session: str | None,
+    created_by_session: str | None,
+) -> str | None:
+    """The session that owns the spec: its assignee, else its creating session, else the
+    assignee of its gate task; None for a user-created spec nobody holds."""
+    if assignee_session is not None:
+        return assignee_session
+    if created_by_session is not None:
+        return created_by_session
+    from agents_taskboard.db.steps import gate_task_id
+
+    gate_id = await gate_task_id(conn, spec_id)
+    if gate_id is None:
+        return None
+    cur = await conn.execute("SELECT assignee_session FROM tasks WHERE id = %s", (gate_id,))
+    row = await cur.fetchone()
+    return row[0] if row else None
 
 
 async def _lock_spec(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) -> dict[str, Any]:
@@ -233,6 +276,7 @@ async def create_spec(
     labels: list[str],
     client_key: str | None,
     docs: list[dict[str, Any]],
+    preset_id: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Create a spec with its first documents (each at version 1); returns (spec, created). A
     replayed (creator, client_key) returns the stored spec with created False. Raises NameTaken,
@@ -258,9 +302,19 @@ async def create_spec(
                 return spec, False
         cur = await conn.execute(
             "INSERT INTO specs (project, name, title, labels, created_by_kind,"
-            " created_by_session, created_by_slug, client_key)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING id",
-            (project, name, title, labels, actor.kind, actor.session_id, actor.slug, client_key),
+            " created_by_session, created_by_slug, client_key, preset_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING id",
+            (
+                project,
+                name,
+                title,
+                labels,
+                actor.kind,
+                actor.session_id,
+                actor.slug,
+                client_key,
+                preset_id,
+            ),
         )
         row = await cur.fetchone()
         if row is None:
@@ -290,6 +344,12 @@ async def create_spec(
         spec = await get_spec(conn, Actor(kind=actor.kind), spec_id)
         assert spec is not None
         return spec, True
+
+
+async def has_replay(conn: psycopg.AsyncConnection, actor: Actor, client_key: str) -> bool:
+    """True when this actor already created a spec with `client_key` (a short read)."""
+    async with conn.transaction():
+        return await _replayed_spec(conn, actor, client_key) is not None
 
 
 async def _replayed_spec(
@@ -645,6 +705,9 @@ async def patch_spec(
                 }
         if "project" in changed:
             detail["project"] = {"from": row["project"], "to": changed["project"]}
+            from agents_taskboard.db.spec_starts import move_spec_starts
+
+            await move_spec_starts(conn, spec_id, row["project"], changed["project"])
             cur = await conn.execute(
                 "UPDATE tasks SET version = version + 1, updated_at = now()"
                 " WHERE spec_id = %s RETURNING id",
@@ -659,10 +722,18 @@ async def patch_spec(
                     {"from": row["project"], "to": changed["project"], "spec": spec_key(spec_id)},
                 )
                 await notify_changed(conn, task_id)
-        await append_spec_event(conn, spec_id, actor, "spec_updated", detail)
+        event_id = await append_spec_event(conn, spec_id, actor, "spec_updated", detail)
         if changed.get("status") == "approved":
-            # notify whoever owns the spec after this write (a PATCH may also reassign)
-            await _notify_owner(conn, actor, {**row, **changed})
+            after = {**row, **changed}
+            owner = await spec_owner(
+                conn, spec_id, after["assignee_session"], after["created_by_session"]
+            )
+            # the owner approving its own spec starts nothing (S-51 Q2); every other approval
+            # queues one start, whose nudge replaces the generic spec notice
+            if actor.kind == "user" or actor.session_id != owner:
+                from agents_taskboard.db.spec_starts import insert_start
+
+                await insert_start(conn, spec_id, event_id, after["project"])
         await notify_spec_changed(conn, spec_id)
         return True
 
