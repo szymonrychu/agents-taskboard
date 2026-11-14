@@ -174,6 +174,28 @@ async def _notify_owner(conn: psycopg.AsyncConnection, actor: Actor, spec: dict[
         await enqueue_spec_notice(conn, spec["id"], target)
 
 
+async def spec_owner(
+    conn: psycopg.AsyncConnection,
+    spec_id: int,
+    assignee_session: str | None,
+    created_by_session: str | None,
+) -> str | None:
+    """The session that owns the spec: its assignee, else its creating session, else the
+    assignee of its gate task; None for a user-created spec nobody holds."""
+    if assignee_session is not None:
+        return assignee_session
+    if created_by_session is not None:
+        return created_by_session
+    from agents_taskboard.db.steps import gate_task_id
+
+    gate_id = await gate_task_id(conn, spec_id)
+    if gate_id is None:
+        return None
+    cur = await conn.execute("SELECT assignee_session FROM tasks WHERE id = %s", (gate_id,))
+    row = await cur.fetchone()
+    return row[0] if row else None
+
+
 async def _lock_spec(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) -> dict[str, Any]:
     """Row-lock the live spec within the actor's scope; NotFound otherwise."""
     scope, params = scoped(actor, "s.project")
@@ -659,10 +681,18 @@ async def patch_spec(
                     {"from": row["project"], "to": changed["project"], "spec": spec_key(spec_id)},
                 )
                 await notify_changed(conn, task_id)
-        await append_spec_event(conn, spec_id, actor, "spec_updated", detail)
+        event_id = await append_spec_event(conn, spec_id, actor, "spec_updated", detail)
         if changed.get("status") == "approved":
-            # notify whoever owns the spec after this write (a PATCH may also reassign)
-            await _notify_owner(conn, actor, {**row, **changed})
+            after = {**row, **changed}
+            owner = await spec_owner(
+                conn, spec_id, after["assignee_session"], after["created_by_session"]
+            )
+            # the owner approving its own spec starts nothing (S-51 Q2); every other approval
+            # queues one start, whose nudge replaces the generic spec notice
+            if actor.kind == "user" or actor.session_id != owner:
+                from agents_taskboard.db.spec_starts import insert_start
+
+                await insert_start(conn, spec_id, event_id, after["project"])
         await notify_spec_changed(conn, spec_id)
         return True
 

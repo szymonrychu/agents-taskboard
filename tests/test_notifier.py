@@ -268,7 +268,9 @@ async def test_user_writes_notify_assignee_else_creator(service_client, web_clie
     conn.execute("UPDATE notices SET status = 'sent', sent_at = now()")
     r = await web_client.patch(f"{SPECS}/{key}", json={"version": 2, "status": "approved"})
     assert r.status_code == 200
-    assert spec_notices(conn)[-1] == (None, spec_id, "s-w", "spec", "pending")
+    # S-51 Q3: the approval's message is the autostart nudge, not a spec notice
+    assert conn.execute("SELECT count(*) FROM spec_starts").fetchone()[0] == 1
+    assert [n[4] for n in spec_notices(conn)] == ["sent"]
 
 
 async def test_accept_and_dismiss_notify(service_client, web_client, conn):
