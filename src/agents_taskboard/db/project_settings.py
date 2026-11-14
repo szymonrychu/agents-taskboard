@@ -9,6 +9,8 @@ from datetime import datetime
 import psycopg
 from agents_common.db.pool import notify
 
+from agents_taskboard.api.actors import Actor
+from agents_taskboard.db.scope import scoped
 from agents_taskboard.db.spec_starts import START_CHANNEL
 
 
@@ -36,6 +38,21 @@ async def settings_for(
     )
     found = {row[0]: AutostartSettings(*row) for row in await cur.fetchall()}
     return {p: found.get(p) or AutostartSettings(p, None, None, None) for p in projects}
+
+
+async def list_settings(
+    conn: psycopg.AsyncConnection, actor: Actor, project: str | None
+) -> list[AutostartSettings]:
+    """The settings rows in the actor's projects (optionally one project), by project."""
+    scope, params = scoped(actor, "project")
+    where = " AND project = %s" if project is not None else ""
+    if project is not None:
+        params = [*params, project]
+    cur = await conn.execute(
+        f"SELECT {_COLUMNS} FROM project_settings WHERE true{scope}{where} ORDER BY project",
+        params,
+    )
+    return [AutostartSettings(*row) for row in await cur.fetchall()]
 
 
 async def get_settings(conn: psycopg.AsyncConnection, project: str) -> AutostartSettings:

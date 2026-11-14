@@ -56,7 +56,7 @@ SPEC_ERRORS = {
     404: "no such spec, document or comment (not_found)",
     409: (
         "conflict (name_taken, already_resolved, already_decided, step_in_progress,"
-        " decisions_open, with decisions on an agent approval)"
+        " decisions_open, with decisions on an agent approval; not_queued on the queue routes)"
     ),
     412: (
         "changed since it was read (stale_version, with current_version on a document or the"
@@ -104,6 +104,11 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("put", "/specs/{key}/steps/order"): (403, 404, 412, 422),
     ("post", "/specs/{key}/steps/next"): (403, 404, 422),
     ("get", "/specs/{key}/gate"): (403, 404),
+    ("get", "/specs/queue"): (403,),
+    ("post", "/specs/queue/{start_id}/move"): (403, 404, 409, 422),
+    ("delete", "/specs/queue/{start_id}"): (403, 404, 409),
+    ("get", "/projects/{slug}/autostart"): (403,),
+    ("put", "/projects/{slug}/autostart"): (403, 422, 503),
 }
 
 PROJECT_ROUTES = {
@@ -111,6 +116,7 @@ PROJECT_ROUTES = {
     ("patch", "/tasks/{key}"),
     ("post", "/specs"),
     ("patch", "/specs/{key}"),
+    ("put", "/projects/{slug}/autostart"),
 }
 
 

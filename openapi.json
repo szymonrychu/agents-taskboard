@@ -39,6 +39,100 @@
         "title": "ActorRef",
         "type": "object"
       },
+      "AutostartPut": {
+        "additionalProperties": false,
+        "description": "Both keys are required; null unsets a limit (autostart stays off until both are set).",
+        "properties": {
+          "max_active_sessions": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Active Sessions"
+          },
+          "max_usage_pct": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Usage Pct"
+          }
+        },
+        "required": [
+          "max_active_sessions",
+          "max_usage_pct"
+        ],
+        "title": "AutostartPut",
+        "type": "object"
+      },
+      "AutostartView": {
+        "additionalProperties": false,
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "max_active_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Active Sessions"
+          },
+          "max_usage_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Usage Pct"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "project",
+          "max_active_sessions",
+          "max_usage_pct",
+          "configured",
+          "updated_at"
+        ],
+        "title": "AutostartView",
+        "type": "object"
+      },
       "CommentCreate": {
         "additionalProperties": false,
         "properties": {
@@ -1035,6 +1129,151 @@
         "title": "PlanPut",
         "type": "object"
       },
+      "ProjectQueue": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QueueItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "max_active_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Active Sessions"
+          },
+          "max_usage_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Usage Pct"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "off",
+              "idle",
+              "ready",
+              "at_limit",
+              "usage_high",
+              "usage_unknown",
+              "usage_refused",
+              "orchestrator_unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "max_active_sessions",
+          "max_usage_pct",
+          "state",
+          "items"
+        ],
+        "title": "ProjectQueue",
+        "type": "object"
+      },
+      "QueueItem": {
+        "additionalProperties": false,
+        "description": "A queued start; `position` is the displayed rank 1..n within the project.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "hold_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Reason"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "spec": {
+            "title": "Spec",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "spec",
+          "title",
+          "position",
+          "ordinal",
+          "hold_reason",
+          "created_at"
+        ],
+        "title": "QueueItem",
+        "type": "object"
+      },
+      "QueueMove": {
+        "additionalProperties": false,
+        "description": "Move to the 1-based rank `position` or just before the queued start `before` (one).",
+        "properties": {
+          "before": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          }
+        },
+        "title": "QueueMove",
+        "type": "object"
+      },
       "Ref": {
         "additionalProperties": false,
         "description": "What implements a plan step.",
@@ -1499,6 +1738,13 @@
             "title": "Project",
             "type": "string"
           },
+          "starts": {
+            "items": {
+              "$ref": "#/components/schemas/SpecStartView"
+            },
+            "title": "Starts",
+            "type": "array"
+          },
           "status": {
             "enum": [
               "draft",
@@ -1551,7 +1797,8 @@
           "url",
           "documents",
           "tasks",
-          "open_comments"
+          "open_comments",
+          "starts"
         ],
         "title": "SpecDetail",
         "type": "object"
@@ -1730,6 +1977,137 @@
           "version"
         ],
         "title": "SpecPatch",
+        "type": "object"
+      },
+      "SpecQueue": {
+        "additionalProperties": false,
+        "properties": {
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectQueue"
+            },
+            "title": "Projects",
+            "type": "array"
+          }
+        },
+        "required": [
+          "projects"
+        ],
+        "title": "SpecQueue",
+        "type": "object"
+      },
+      "SpecStartView": {
+        "additionalProperties": false,
+        "description": "One approval's start record: `status` is new, queued, in_progress, handled, failed or\nremoved; `mode` is nudged or started once handled.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "hold_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Reason"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ordinal",
+          "status",
+          "mode",
+          "project",
+          "position",
+          "hold_reason",
+          "slug",
+          "session_id",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SpecStartView",
         "type": "object"
       },
       "SpecSummary": {
@@ -2686,6 +3064,112 @@
         "summary": "Summary"
       }
     },
+    "/taskboard/api/v1/projects/{slug}/autostart": {
+      "get": {
+        "operationId": "get_autostart_taskboard_api_v1_projects__slug__autostart_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutostartView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "source address is not allowed (forbidden)"
+          }
+        },
+        "summary": "Get Autostart"
+      },
+      "put": {
+        "operationId": "put_autostart_taskboard_api_v1_projects__slug__autostart_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutostartPut"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutostartView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "source address is not allowed (forbidden)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, unknown_project, project_archived, project_mismatch)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the orchestrator cannot validate the project (upstream_unavailable)"
+          }
+        },
+        "summary": "Put Autostart"
+      }
+    },
     "/taskboard/api/v1/specs": {
       "get": {
         "operationId": "list_specs_taskboard_api_v1_specs_get",
@@ -2867,7 +3351,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval; not_queued on the queue routes)"
           },
           "413": {
             "content": {
@@ -2901,6 +3385,183 @@
           }
         },
         "summary": "Create Spec"
+      }
+    },
+    "/taskboard/api/v1/specs/queue": {
+      "get": {
+        "operationId": "get_queue_taskboard_api_v1_specs_queue_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecQueue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
+          }
+        },
+        "summary": "Get Queue"
+      }
+    },
+    "/taskboard/api/v1/specs/queue/{start_id}": {
+      "delete": {
+        "operationId": "remove_start_taskboard_api_v1_specs_queue__start_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "start_id",
+            "required": true,
+            "schema": {
+              "title": "Start Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval; not_queued on the queue routes)"
+          }
+        },
+        "summary": "Remove Start"
+      }
+    },
+    "/taskboard/api/v1/specs/queue/{start_id}/move": {
+      "post": {
+        "operationId": "move_start_taskboard_api_v1_specs_queue__start_id__move_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "start_id",
+            "required": true,
+            "schema": {
+              "title": "Start Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueMove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectQueue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "forbidden (forbidden, user_only, superleader_only, project_forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such spec, document or comment (not_found)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval; not_queued on the queue routes)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, no_suggestion, dependency_cycle)"
+          }
+        },
+        "summary": "Move Start"
       }
     },
     "/taskboard/api/v1/specs/{key}": {
@@ -3053,7 +3714,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval; not_queued on the queue routes)"
           },
           "412": {
             "content": {
@@ -3330,7 +3991,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval; not_queued on the queue routes)"
           },
           "412": {
             "content": {
@@ -3418,7 +4079,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval; not_queued on the queue routes)"
           },
           "422": {
             "content": {
@@ -3496,7 +4157,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval; not_queued on the queue routes)"
           },
           "422": {
             "content": {
@@ -4319,7 +4980,7 @@
                 }
               }
             },
-            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval)"
+            "description": "conflict (name_taken, already_resolved, already_decided, step_in_progress, decisions_open, with decisions on an agent approval; not_queued on the queue routes)"
           },
           "412": {
             "content": {

@@ -31,6 +31,10 @@ ROUTES = {
     ("post", f"{CID}/resolve", "200"): "SpecComment",
     ("post", f"{CID}/accept", "201"): "SuggestionAccepted",
     ("post", f"{CID}/dismiss", "200"): "SpecComment",
+    ("get", f"{PREFIX}/specs/queue", "200"): "SpecQueue",
+    ("post", f"{PREFIX}/specs/queue/{{start_id}}/move", "200"): "ProjectQueue",
+    ("get", f"{PREFIX}/projects/{{slug}}/autostart", "200"): "AutostartView",
+    ("put", f"{PREFIX}/projects/{{slug}}/autostart", "200"): "AutostartView",
 }
 
 

@@ -117,6 +117,22 @@ _VERSION_COLUMNS = (
 )
 
 
+START_FIELDS = (
+    "id",
+    "ordinal",
+    "status",
+    "mode",
+    "project",
+    "position",
+    "hold_reason",
+    "slug",
+    "session_id",
+    "error",
+    "created_at",
+    "updated_at",
+)
+
+
 def spec_row_json(row: dict[str, Any]) -> dict[str, Any]:
     """The summary JSON of one spec row (no documents)."""
     row = dict(row)
@@ -161,6 +177,11 @@ async def get_spec(
         (spec_id,),
     )
     spec["open_comments"] = (await cur.fetchone())[0]
+    from agents_taskboard.db.spec_starts import starts_of_spec  # spec_starts imports this module
+
+    spec["starts"] = [
+        {k: row[k] for k in START_FIELDS} for row in await starts_of_spec(conn, spec_id)
+    ]
     return spec
 
 

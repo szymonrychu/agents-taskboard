@@ -291,7 +291,8 @@ async def mark_failed(
 async def list_queue(
     conn: psycopg.AsyncConnection, actor: Actor, project: str | None
 ) -> list[dict[str, Any]]:
-    """Queued starts the actor may see, optionally of one project, in queue order."""
+    """Queued starts the actor may see, optionally of one project, in queue order. `rank` is the
+    displayed 1..n place among the project's queued rows (positions may have gaps)."""
     scope, params = scoped(actor, "q.project")
     where = " AND q.project = %s" if project is not None else ""
     if project is not None:
@@ -299,13 +300,26 @@ async def list_queue(
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
             "SELECT q.id, q.spec_id, q.ordinal, q.project, q.position, q.hold_reason,"
-            " q.owner_session, q.attempts, q.created_at, q.updated_at, s.title"
+            " q.owner_session, q.attempts, q.created_at, q.updated_at, s.title,"
+            " row_number() OVER (PARTITION BY q.project ORDER BY q.position, q.id) AS rank"
             " FROM spec_starts q JOIN specs s ON s.id = q.spec_id"
             f" WHERE q.status = 'queued'{scope}{where} ORDER BY q.project, q.position",
             params,
         )
         rows = await cur.fetchall()
     return [{**r, "spec": spec_key(r["spec_id"])} for r in rows]
+
+
+async def get_scoped(
+    conn: psycopg.AsyncConnection, actor: Actor, start_id: int
+) -> tuple[int, str] | None:
+    """(spec id, project) of the start, or None when absent or outside the actor's projects."""
+    scope, params = scoped(actor, "project")
+    cur = await conn.execute(
+        f"SELECT spec_id, project FROM spec_starts WHERE id = %s{scope}", (start_id, *params)
+    )
+    row = await cur.fetchone()
+    return (row[0], row[1]) if row else None
 
 
 async def move(
