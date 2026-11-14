@@ -180,3 +180,18 @@ agents-common `listen` reconnects only on OperationalError/OSError; any other ex
 - Orchestrator usage refusal (409 `usage_quota`) puts the row back at the head (`requeue_head`, hold `usage_refused`) until `retry_at` (reset plus 60 s); nothing behind it jumps the queue. Other orchestrator failures requeue at the head with hold `orchestrator_unavailable` and the row's own capped backoff; a failed session list holds every head `orchestrator_unavailable` without changing status. Holds are not status changes, so a held queue never hot-loops the notifier. `spec_starts._lock_queue` became public `lock_queue` for this.
 
 - 2026-11-14 (S-51 Q6, Q13, Q15): the queue routes live under `/specs` (`GET /specs/queue`, `POST /specs/queue/{id}/move`, `DELETE /specs/queue/{id}`) so the orchestrator spec relay covers them; the spec text named `/projects/{slug}/spec-queue` and the relay reuse was decided instead. The autostart router is included before the spec router on every app, else `/specs/{key}` captures `/specs/queue`. Remove and the settings routes (`/projects/{slug}/autostart`) are user-listener only; move is for the user and a superleader. `QueueItem.position` is a displayed dense rank (`row_number()` over the project's queued rows), so gaps in the stored positions never show; a move's `position` is a rank and goes to the repository as is (it orders the queued ids and rewrites them densely). PUT settings skips the orchestrator lookup for `default`, like `require_target`.
+
+## 2026-11-14 - autostart fix round 1 (S-51, PR 14 review I1-I3)
+
+- A spec project move (patch_spec) moves the spec's `new` and `queued` spec_starts rows to the new
+  project; queued rows go to the tail of the new queue, both queue advisory locks taken in sorted
+  project order (no deadlock), the old queue renumbered. in_progress, handled, failed and removed
+  rows stay. Why: gate, limits and the created session must use the project the spec lives in.
+- insert_start inserts nothing while the spec has a row in new, queued or in_progress (the existing
+  row serves a re-approval); a handled, failed or removed row does not block (new ordinal).
+- Before the nudge (handle_new) and before begin_start, a spec that is not `approved` sets the row
+  to `removed` (status-guarded, position cleared, error `spec_not_approved`) and appends spec event
+  `implementation_trigger_removed`. Why: a document write returns an approved spec to review and a
+  stale row must not start an unapproved spec.
+- retry_later caps the backoff exponent (`power(2, least(attempts, 30))`, as notices.py) so a long
+  outage does not overflow.

@@ -99,8 +99,16 @@ async def insert_start(
     conn: psycopg.AsyncConnection, spec_id: int, approval_event_id: int, project: str
 ) -> int | None:
     """Record one start for the approval event: ordinal is the spec's next. None when the event
-    already has a row."""
+    already has a row or the spec already has an active one (new, queued or in_progress): that row
+    serves the re-approval."""
     await conn.execute("SELECT pg_advisory_xact_lock(hashtext('spec_start:' || %s))", (spec_id,))
+    cur = await conn.execute(
+        "SELECT 1 FROM spec_starts WHERE spec_id = %s"
+        " AND status IN ('new', 'queued', 'in_progress')",
+        (spec_id,),
+    )
+    if await cur.fetchone() is not None:
+        return None
     cur = await conn.execute(
         "INSERT INTO spec_starts (spec_id, approval_event_id, ordinal, project)"
         " SELECT %s, %s, coalesce(max(ordinal), 0) + 1, %s FROM spec_starts WHERE spec_id = %s"
@@ -112,6 +120,52 @@ async def insert_start(
         return None
     await notify(conn, START_CHANNEL)
     return row[0]
+
+
+async def move_spec_starts(conn: psycopg.AsyncConnection, spec_id: int, old: str, new: str) -> None:
+    """The spec moved from project `old` to `new`: its `new` rows follow, its queued rows go to
+    the tail of the new queue (both queues are locked in sorted project order) and the old queue
+    is renumbered. in_progress, handled, failed and removed rows stay as they are."""
+    for project in sorted({old, new}):
+        await lock_queue(conn, project)
+    await conn.execute(
+        "UPDATE spec_starts SET project = %s, updated_at = now()"
+        " WHERE spec_id = %s AND status = 'new'",
+        (new, spec_id),
+    )
+    cur = await conn.execute(
+        "SELECT id FROM spec_starts WHERE spec_id = %s AND status = 'queued' AND project = %s"
+        " ORDER BY position, id FOR UPDATE",
+        (spec_id, old),
+    )
+    ids = [row[0] for row in await cur.fetchall()]
+    if not ids:
+        return
+    await conn.execute(
+        "UPDATE spec_starts s SET project = %s, updated_at = now(),"
+        " position = (SELECT coalesce(max(position), 0) FROM spec_starts"
+        "             WHERE project = %s AND status = 'queued') + v.n"
+        " FROM unnest(%s::bigint[], %s::int[]) AS v(id, n) WHERE s.id = v.id",
+        (new, new, ids, list(range(1, len(ids) + 1))),
+    )
+    await _renumber(conn, old)
+
+
+async def drop_unapproved(conn: psycopg.AsyncConnection, start_id: int, from_status: str) -> bool:
+    """Take a row of a spec that is no longer approved out for good (`removed`, status-guarded,
+    position cleared)."""
+    if from_status == "queued":
+        project = await _project_of(conn, start_id)
+        if project is None:
+            return False
+        await lock_queue(conn, project)
+    cur = await conn.execute(
+        "UPDATE spec_starts SET status = 'removed', position = NULL, hold_reason = NULL,"
+        " error = 'spec_not_approved', finished_at = now(), updated_at = now()"
+        " WHERE id = %s AND status = %s",
+        (start_id, from_status),
+    )
+    return cur.rowcount == 1
 
 
 async def claim_new(conn: psycopg.AsyncConnection) -> SpecStart | None:
@@ -165,8 +219,9 @@ async def retry_later(
     """Count one failed attempt of a row in `status` and push its next attempt out."""
     cur = await conn.execute(
         "UPDATE spec_starts SET attempts = attempts + 1, updated_at = now(),"
-        " next_attempt_at = now() + make_interval(secs => least(%s::float8 * power(2, attempts),"
-        " %s::float8)) WHERE id = %s AND status = %s",
+        " next_attempt_at = now() + make_interval(secs => least("
+        "   %s::float8 * power(2, least(attempts, 30)), %s::float8))"
+        " WHERE id = %s AND status = %s",
         (backoff_base, backoff_max, start_id, status),
     )
     return cur.rowcount == 1

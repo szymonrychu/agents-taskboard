@@ -44,8 +44,8 @@ async def new_start(
     """One spec (assigned to `owner`) with a `new` start; returns (spec id, start id)."""
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "INSERT INTO specs (name, title, project, created_by_kind, assignee_session)"
-            " VALUES (%s, 't', %s, 'user', %s) RETURNING id",
+            "INSERT INTO specs (name, title, project, created_by_kind, assignee_session, status)"
+            " VALUES (%s, 't', %s, 'user', %s, 'approved') RETURNING id",
             (name, project, owner),
         )
         spec_id = (await cur.fetchone())[0]
@@ -191,3 +191,18 @@ async def test_no_trigger_event_when_nudge_not_recorded(pool, conn, fake, client
     monkeypatch.setattr(repo, "mark_nudged", unchanged)
     assert await run(pool, client) is True
     assert not events(conn, spec_id, "implementation_triggered")
+
+
+async def test_unapproved_spec_new_row_is_removed(pool, conn, fake, client):
+    owner = add_session(fake)
+    spec_id, start_id = await new_start(pool, "a", owner)
+    conn.execute("UPDATE specs SET status = 'review' WHERE id = %s", (spec_id,))
+    assert await run(pool, client) is True
+    status = conn.execute(
+        "SELECT status, error, position FROM spec_starts WHERE id = %s", (start_id,)
+    ).fetchone()
+    assert status == ("removed", "spec_not_approved", None)
+    assert not fake.messages
+    assert events(conn, spec_id, "implementation_trigger_removed") == [
+        {"start_id": start_id, "reason": "spec_not_approved"}
+    ]

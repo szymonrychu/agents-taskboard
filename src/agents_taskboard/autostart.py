@@ -116,13 +116,16 @@ async def handle_new(
         if start is None:
             return None
         cur = await conn.cursor(row_factory=dict_row).execute(
-            "SELECT assignee_session, created_by_session FROM specs"
+            "SELECT assignee_session, created_by_session, status FROM specs"
             " WHERE id = %s AND deleted_at IS NULL",
             (start.spec_id,),
         )
         spec = await cur.fetchone()
         if spec is None:
             await spec_starts.mark_failed(conn, start.id, "new", "spec_deleted")
+            return True
+        if spec["status"] != "approved":
+            await _drop_unapproved(conn, start, "new")
             return True
         owner = await spec_owner(
             conn, start.spec_id, spec["assignee_session"], spec["created_by_session"]
@@ -166,6 +169,18 @@ async def _trigger_failed(conn, start: SpecStart, error: str) -> None:
         conn, start.spec_id, AUTOSTART_ACTOR, "implementation_trigger_failed", detail
     )
     await notify_spec_changed(conn, start.spec_id)
+
+
+async def _drop_unapproved(conn, start: SpecStart, from_status: str) -> bool:
+    """Remove a start whose spec is not approved any more, with a spec event."""
+    if not await spec_starts.drop_unapproved(conn, start.id, from_status):
+        return False
+    detail = {"start_id": start.id, "reason": "spec_not_approved"}
+    await append_spec_event(
+        conn, start.spec_id, AUTOSTART_ACTOR, "implementation_trigger_removed", detail
+    )
+    await notify_spec_changed(conn, start.spec_id)
+    return True
 
 
 async def _dispatch_start(
@@ -313,11 +328,14 @@ async def _serve_project(
             await spec_starts.set_hold(conn, head.id, hold)
             return False
         cur = await conn.execute(
-            "SELECT preset_id FROM specs WHERE id = %s AND deleted_at IS NULL", (head.spec_id,)
+            "SELECT preset_id, status FROM specs WHERE id = %s AND deleted_at IS NULL",
+            (head.spec_id,),
         )
         spec = await cur.fetchone()
         if spec is None:
             return await spec_starts.mark_failed(conn, head.id, "queued", "spec_deleted")
+        if spec[1] != "approved":
+            return await _drop_unapproved(conn, head, "queued")
     preset = spec[0] or await presets.project_default(project)
     if preset is None:
         return await _fail_no_preset(pool, head)

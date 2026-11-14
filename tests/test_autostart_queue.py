@@ -77,8 +77,8 @@ async def queued(
     """One spec with a queued start; returns (spec id, start id, gate task id)."""
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "INSERT INTO specs (name, title, project, created_by_kind, preset_id)"
-            " VALUES (%s, 't', %s, 'user', %s) RETURNING id",
+            "INSERT INTO specs (name, title, project, created_by_kind, preset_id, status)"
+            " VALUES (%s, 't', %s, 'user', %s, 'approved') RETURNING id",
             (name, project, preset_id),
         )
         spec_id = (await cur.fetchone())[0]
@@ -513,3 +513,19 @@ async def test_notifier_loop_starts_a_queued_spec(pool, conn, fake, client, pres
         await asyncio.wait_for(task, 5)
     assert row(conn, a)[:2] == ("handled", "started")
     assert len(created(fake)) == 1
+
+
+async def test_unapproved_spec_row_is_removed_not_started(
+    pool, conn, fake, client, presets, preset
+):
+    spec_id, a, _ = await queued(pool, "a", preset)
+    _, b, _ = await queued(pool, "b2", preset)
+    await configure(pool, "a", 5, 90)
+    conn.execute("UPDATE specs SET status = 'review' WHERE id = %s", (spec_id,))
+    assert await run(pool, client, presets) is True
+    assert row(conn, a) == ("removed", None, None, None, "spec_not_approved")
+    assert not created(fake)
+    assert events(conn, spec_id, "implementation_trigger_removed") == [
+        {"start_id": a, "reason": "spec_not_approved"}
+    ]
+    assert row(conn, b)[0] == "queued"

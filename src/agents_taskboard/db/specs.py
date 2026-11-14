@@ -705,6 +705,9 @@ async def patch_spec(
                 }
         if "project" in changed:
             detail["project"] = {"from": row["project"], "to": changed["project"]}
+            from agents_taskboard.db.spec_starts import move_spec_starts
+
+            await move_spec_starts(conn, spec_id, row["project"], changed["project"])
             cur = await conn.execute(
                 "UPDATE tasks SET version = version + 1, updated_at = now()"
                 " WHERE spec_id = %s RETURNING id",

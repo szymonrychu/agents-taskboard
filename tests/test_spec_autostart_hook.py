@@ -50,6 +50,7 @@ async def test_repeat_patch_without_status_change_inserts_nothing(service_client
 async def test_reapproval_after_document_write_inserts_second(service_client, web_client, conn):
     key = await make_spec(service_client)
     await web_client.patch(f"{SPECS}/{key}", json={"version": 1, "status": "approved"})
+    conn.execute("UPDATE spec_starts SET status = 'handled', mode = 'started'")
     r = await web_client.put(
         f"{SPECS}/{key}/docs/plan.md", json={"body": "edited", "base_version": 1}
     )
@@ -134,3 +135,48 @@ async def test_approval_row_commits_with_status(service_client, web_client, conn
     row = conn.execute("SELECT status FROM specs WHERE id = %s", (int(key2[2:]),)).fetchone()
     assert row[0] != "approved"
     assert len(starts(conn)) == 1
+
+
+async def test_reapproval_with_active_row_inserts_nothing(service_client, web_client, conn):
+    key = await make_spec(service_client)
+    await approve(web_client, key, {})
+    await web_client.put(f"{SPECS}/{key}/docs/plan.md", json={"body": "edited", "base_version": 1})
+    spec = (await web_client.get(f"{SPECS}/{key}")).json()
+    r = await approve(web_client, key, {}, spec["version"])
+    assert r.status_code == 200, r.text
+    assert starts(conn) == [(int(key[2:]), "new", 1)]
+
+
+async def test_project_move_takes_new_and_queued_starts_along(service_client, web_client, conn):
+    key = await make_spec(service_client)
+    spec_id = int(key[2:])
+    project = (await web_client.get(f"{SPECS}/{key}")).json()["project"]
+    other = "b" if project != "b" else "a"
+    # a queued row of another spec already waits in the target project
+    conn.execute(
+        "INSERT INTO specs (name, title, project, created_by_kind, status)"
+        " VALUES ('x', 't', %s, 'user', 'approved')",
+        (other,),
+    )
+    xid = conn.execute("SELECT id FROM specs WHERE name = 'x'").fetchone()[0]
+    conn.execute(
+        "INSERT INTO spec_starts (spec_id, approval_event_id, ordinal, project, status, position)"
+        " VALUES (%s, 9001, 1, %s, 'queued', 1)",
+        (xid, other),
+    )
+    await approve(web_client, key, {})
+    conn.execute(
+        "UPDATE spec_starts SET status = 'queued', position = 1 WHERE spec_id = %s", (spec_id,)
+    )
+    spec = (await web_client.get(f"{SPECS}/{key}")).json()
+    r = await web_client.patch(
+        f"{SPECS}/{key}", json={"version": spec["version"], "project": other}
+    )
+    assert r.status_code == 200, r.text
+    rows = conn.execute(
+        "SELECT spec_id, project, position FROM spec_starts ORDER BY position"
+    ).fetchall()
+    assert rows == [(xid, other, 1), (spec_id, other, 2)]
+    assert conn.execute(
+        "SELECT count(*) FROM spec_starts WHERE project = %s AND status = 'queued'", (project,)
+    ).fetchone() == (0,)

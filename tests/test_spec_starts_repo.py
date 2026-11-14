@@ -58,6 +58,7 @@ async def test_insert_start_is_idempotent_per_event(pool):
         spec = await make_spec(conn)
         first = await repo.insert_start(conn, spec, 1, "default")
         again = await repo.insert_start(conn, spec, 1, "default")
+        await conn.execute("UPDATE spec_starts SET status = 'handled'")
         second = await repo.insert_start(conn, spec, 2, "default")
         rows = await (
             await conn.execute("SELECT id, ordinal FROM spec_starts ORDER BY id")
@@ -278,9 +279,46 @@ async def test_starts_of_spec_newest_first(pool):
     async with pool.connection() as conn:
         spec = await make_spec(conn)
         first = await repo.insert_start(conn, spec, 1, "default")
+        await conn.execute("UPDATE spec_starts SET status = 'handled'")
         second = await repo.insert_start(conn, spec, 2, "default")
         rows = await repo.starts_of_spec(conn, spec)
         limited = await repo.starts_of_spec(conn, spec, limit=1)
     assert [r["id"] for r in rows] == [second, first]
     assert [r["ordinal"] for r in rows] == [2, 1]
     assert len(limited) == 1
+
+
+async def test_retry_later_caps_the_exponent(pool):
+    async with pool.connection() as conn:
+        spec = await make_spec(conn)
+        sid = await repo.insert_start(conn, spec, 1, "default")
+        await conn.execute("UPDATE spec_starts SET attempts = 2000")
+        assert await repo.retry_later(conn, sid, "new", 1.0, 60.0) is True
+        row = await (
+            await conn.execute(
+                "SELECT attempts, next_attempt_at > now() + interval '55 seconds' FROM spec_starts"
+            )
+        ).fetchone()
+    assert row == (2001, True)
+
+
+async def test_move_spec_starts_renumbers_the_old_queue(pool):
+    ids = await queued(pool, "p", 3)
+    async with pool.connection() as conn:
+        spec = (
+            await (
+                await conn.execute("SELECT spec_id FROM spec_starts WHERE id = %s", (ids[0],))
+            ).fetchone()
+        )[0]
+        await repo.move_spec_starts(conn, spec, "p", "q")
+    assert await order(pool, "p") == [(ids[1], 1), (ids[2], 2)]
+    assert await order(pool, "q") == [(ids[0], 1)]
+
+
+async def test_insert_start_skips_when_spec_has_active_row(pool):
+    async with pool.connection() as conn:
+        spec = await make_spec(conn)
+        assert await repo.insert_start(conn, spec, 1, "default") is not None
+        assert await repo.insert_start(conn, spec, 2, "default") is None
+        await conn.execute("UPDATE spec_starts SET status = 'failed'")
+        assert await repo.insert_start(conn, spec, 3, "default") is not None
