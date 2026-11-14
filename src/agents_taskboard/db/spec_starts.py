@@ -74,7 +74,7 @@ _COLUMNS = (
 _SELECT = f"SELECT {_COLUMNS} FROM spec_starts"
 
 
-async def _lock_queue(conn: psycopg.AsyncConnection, project: str) -> None:
+async def lock_queue(conn: psycopg.AsyncConnection, project: str) -> None:
     await conn.execute("SELECT pg_advisory_xact_lock(hashtext('spec_queue:' || %s))", (project,))
 
 
@@ -143,7 +143,7 @@ async def enqueue(
     project = await _project_of(conn, start_id)
     if project is None:
         return None
-    await _lock_queue(conn, project)
+    await lock_queue(conn, project)
     cur = await conn.execute(
         "UPDATE spec_starts SET status = 'queued', owner_session = %s, updated_at = now(),"
         " position = (SELECT coalesce(max(position), 0) + 1 FROM spec_starts"
@@ -218,7 +218,7 @@ async def requeue_head(
     project = await _project_of(conn, start_id)
     if project is None:
         return False
-    await _lock_queue(conn, project)
+    await lock_queue(conn, project)
     cur = await conn.execute(
         "UPDATE spec_starts SET status = 'queued', position = 0, hold_reason = %s,"
         " next_attempt_at = %s, updated_at = now() WHERE id = %s AND status = 'in_progress'",
@@ -325,7 +325,7 @@ async def move(
     project = await _project_of(conn, start_id)
     if project is None:
         raise StartNotFound(start_id)
-    await _lock_queue(conn, project)
+    await lock_queue(conn, project)
     cur = await conn.execute(
         "SELECT id FROM spec_starts WHERE project = %s AND status = 'queued'"
         " ORDER BY position, id FOR UPDATE",
@@ -356,7 +356,7 @@ async def remove(conn: psycopg.AsyncConnection, start_id: int) -> int:
     project = await _project_of(conn, start_id)
     if project is None:
         raise StartNotFound(start_id)
-    await _lock_queue(conn, project)
+    await lock_queue(conn, project)
     cur = await conn.execute(
         "UPDATE spec_starts SET status = 'removed', position = NULL, hold_reason = NULL,"
         " finished_at = now(), updated_at = now() WHERE id = %s AND status = 'queued'"

@@ -23,7 +23,7 @@ from agents_common.orchestrator import (
 from agents_common.runtime import advisory_singleton, run_service
 from psycopg_pool import AsyncConnectionPool
 
-from agents_taskboard.autostart import handle_new
+from agents_taskboard.autostart import UsageSource, handle_new, run_queues
 from agents_taskboard.db.events import (
     CHANNEL,
     SPEC_CHANNEL,
@@ -41,7 +41,9 @@ from agents_taskboard.db.notices import (
 from agents_taskboard.db.spec_starts import START_CHANNEL
 from agents_taskboard.db.specs import spec_key
 from agents_taskboard.db.tasks import task_key, task_url
+from agents_taskboard.presets import PresetLookup
 from agents_taskboard.settings import Settings
+from agents_taskboard.usage import UsageClient
 
 log = logging.getLogger(__name__)
 
@@ -205,13 +207,18 @@ async def run_notifier(
     client: OrchestratorClient,
     stop: asyncio.Event,
     lookup: SessionLookup | None = None,
+    usage: UsageSource | None = None,
+    presets: PresetLookup | None = None,
 ) -> None:
-    """Scan label events, then drain due notices, then handle new spec starts, then wait for
-    NOTIFY task_changed, spec_changed or spec_start or the poll
-    interval. A failed send only reschedules its own row (exponential, capped), so it never
-    stalls other notices; a failed label lookup leaves its event unscanned and pauses only the
-    scanning (same backoff), never the sending. Runs until `stop` is set."""
+    """Scan label events, then drain due notices, then handle new spec starts, then run the
+    spec start queues (`usage` None: the gate reads usage_unknown and nothing starts; `presets`
+    defaults to a lookup over `client`), then wait for NOTIFY task_changed, spec_changed or
+    spec_start or the poll interval. A failed send only reschedules its own row (exponential,
+    capped), so it never stalls other notices; a failed label lookup leaves its event unscanned
+    and pauses only the scanning (same backoff), never the sending. Runs until `stop` is set."""
     own = lookup is None
+    if presets is None:
+        presets = PresetLookup(client)
     if lookup is None:
         lookup = SessionLookup(
             settings.orchestrator_url, settings.orchestrator_token.get_secret_value()
@@ -259,7 +266,16 @@ async def run_notifier(
                 settings.notifier_poll_seconds,
                 settings.notifier_backoff_max_seconds,
             )
-            if result is None and scanned is None and started is None:
+            queued = await run_queues(
+                pool,
+                client,
+                usage,
+                presets,
+                settings.public_base_url,
+                settings.notifier_poll_seconds,
+                settings.notifier_backoff_max_seconds,
+            )
+            if result is None and scanned is None and started is None and not queued:
                 wait = settings.notifier_poll_seconds
                 if scan_resume > loop.time():
                     wait = min(wait, scan_resume - loop.time())
@@ -280,10 +296,12 @@ async def run_singleton(
     client: OrchestratorClient,
     stop: asyncio.Event,
     lookup: SessionLookup | None = None,
+    usage: UsageSource | None = None,
+    presets: PresetLookup | None = None,
 ) -> None:
     """One notifier cluster-wide: wait for the advisory lock, then run."""
     async with advisory_singleton(pool, LOCK_NAME):
-        await run_notifier(settings, pool, client, stop, lookup)
+        await run_notifier(settings, pool, client, stop, lookup, usage, presets)
 
 
 async def serve(settings: Settings, stop: asyncio.Event) -> None:
@@ -292,9 +310,18 @@ async def serve(settings: Settings, stop: asyncio.Event) -> None:
     client = OrchestratorClient(
         settings.orchestrator_url, settings.orchestrator_token.get_secret_value()
     )
+    usage = None
+    if settings.usage_url:
+        usage = UsageClient(
+            settings.usage_url,
+            settings.usage_token.get_secret_value(),
+            cache_seconds=settings.usage_cache_seconds,
+        )
     try:
-        await run_singleton(settings, pool, client, stop)
+        await run_singleton(settings, pool, client, stop, usage=usage, presets=PresetLookup(client))
     finally:
+        if usage is not None:
+            await usage.aclose()
         await client.aclose()
         await pool.close()
 
