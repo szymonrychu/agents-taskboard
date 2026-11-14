@@ -26,6 +26,9 @@ class Settings(BaseServiceSettings):
     delegate_port: int = Field(8003, ge=1, le=65535)
     notifier_poll_seconds: float = Field(5.0, gt=0)
     notifier_backoff_max_seconds: float = Field(60.0, gt=0)
+    usage_url: str = ""
+    usage_token: SecretStr = Field(SecretStr(""), repr=False)
+    usage_cache_seconds: float = Field(30.0, gt=0)
 
     @field_validator("allowed_cidrs")
     @classmethod
@@ -46,6 +49,20 @@ class Settings(BaseServiceSettings):
         if parts.scheme not in ("http", "https") or not parts.netloc:
             raise ValueError(f"TASKBOARD_PUBLIC_BASE_URL::not an absolute http(s) URL: {value!r}")
         return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def _usage(self) -> "Settings":
+        if not self.usage_url:
+            return self
+        parts = urlsplit(self.usage_url)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            raise ValueError(
+                f"TASKBOARD_USAGE_URL::not an absolute http(s) URL: {self.usage_url!r}"
+            )
+        if not self.usage_token.get_secret_value().strip():
+            raise ValueError("TASKBOARD_USAGE_TOKEN::required when TASKBOARD_USAGE_URL is set")
+        self.usage_url = self.usage_url.rstrip("/")
+        return self
 
     @field_validator("relay_token")
     @classmethod

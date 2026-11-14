@@ -315,3 +315,54 @@ def test_chart_mindmap_absent_by_default_and_both_fails():
     proc = _run(_merge(BASE, {**WITH_DELEGATE, "mindmapTokens": "a", "mindmapExistingSecret": "m"}))
     assert proc.returncode != 0
     assert "set only one of the mindmap tokens value" in proc.stderr
+
+
+USAGE_TOKEN = "".join(["usage", "-", "fixture", "-", "value"])
+
+
+def test_notifier_gets_usage_env():
+    docs = render({"usage": {"url": "http://usage.agents.svc", "token": USAGE_TOKEN}})
+    cm = of_kind(docs, "ConfigMap")[0]["data"]
+    assert cm["TASKBOARD_USAGE_URL"] == "http://usage.agents.svc"
+    assert USAGE_TOKEN not in str(cm)
+    deps = deployments(docs)
+    env = env_of(deps["notifier"]["spec"]["template"]["spec"]["containers"][0])
+    ref = env["TASKBOARD_USAGE_TOKEN"]["valueFrom"]["secretKeyRef"]
+    assert ref["key"] == "usage-token"
+    assert ref["name"] in {s["metadata"]["name"] for s in of_kind(docs, "Secret")}
+    for name in ("web", "service"):
+        other = env_of(deps[name]["spec"]["template"]["spec"]["containers"][0])
+        assert "TASKBOARD_USAGE_TOKEN" not in other
+
+
+def test_usage_existing_secret_referenced():
+    docs = render(
+        {
+            "usage": {
+                "url": "http://usage.agents.svc",
+                "existingSecret": "usage-tok",
+                "existingSecretKey": "t",
+            }
+        }
+    )
+    env = env_of(deployments(docs)["notifier"]["spec"]["template"]["spec"]["containers"][0])
+    assert env["TASKBOARD_USAGE_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": "usage-tok",
+        "key": "t",
+    }
+
+
+def test_usage_absent_by_default():
+    docs = render()
+    assert "TASKBOARD_USAGE_URL" not in of_kind(docs, "ConfigMap")[0]["data"]
+    env = env_of(deployments(docs)["notifier"]["spec"]["template"]["spec"]["containers"][0])
+    assert "TASKBOARD_USAGE_TOKEN" not in env
+
+
+def test_usage_token_without_url_fails():
+    proc = _run(_merge(BASE, {"usage": {"token": USAGE_TOKEN}}))
+    assert proc.returncode != 0
+    assert "usage.url" in proc.stderr
+    proc = _run(_merge(BASE, {"usage": {"url": "http://usage.agents.svc"}}))
+    assert proc.returncode != 0
+    assert "usage token is required" in proc.stderr

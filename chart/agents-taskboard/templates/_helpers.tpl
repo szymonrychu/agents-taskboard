@@ -96,6 +96,20 @@ key: {{ .own | quote }}
 {{- include "agents-taskboard.secretKeyRef" (dict "ctx" . "existing" $o.existingSecret "key" $o.existingSecretKey "own" "orchestrator-token" "set" (ne ($o.token | default "") "") "what" "orchestrator token") -}}
 {{- end }}
 
+{{/* The usage source is wanted when a url is set; a token or Secret without a url is a mistake. */}}
+{{- define "agents-taskboard.usageEnabled" -}}
+{{- $u := .Values.usage -}}
+{{- if and (not $u.url) (or $u.token $u.existingSecret) -}}
+{{- fail "agents-taskboard: usage.url is required when a usage token or existing Secret is set" -}}
+{{- end -}}
+{{- if $u.url -}}true{{- end -}}
+{{- end }}
+
+{{- define "agents-taskboard.usageRef" -}}
+{{- $u := .Values.usage -}}
+{{- include "agents-taskboard.secretKeyRef" (dict "ctx" . "existing" $u.existingSecret "key" $u.existingSecretKey "own" "usage-token" "set" (ne ($u.token | default "") "") "what" "usage token") -}}
+{{- end }}
+
 {{- define "agents-taskboard.relayRef" -}}
 {{- include "agents-taskboard.secretKeyRef" (dict "ctx" . "existing" .Values.relayExistingSecret "key" .Values.relayExistingSecretKey "own" "relay-token" "set" (ne (.Values.relayToken | default "") "") "what" "relay token") -}}
 {{- end }}
@@ -118,6 +132,9 @@ TASKBOARD_SERVICE_PORT: {{ .Values.components.service.port | int | toString | qu
 TASKBOARD_ALLOWED_CIDRS: {{ join "," .Values.allowedCidrs | quote }}
 {{- if include "agents-taskboard.delegateEnabled" . }}
 TASKBOARD_DELEGATE_PORT: {{ .Values.components.delegate.port | int | toString | quote }}
+{{- end }}
+{{- if include "agents-taskboard.usageEnabled" . }}
+TASKBOARD_USAGE_URL: {{ .Values.usage.url | quote }}
 {{- end }}
 {{- range $k, $v := .Values.env }}
 {{- if not (hasPrefix "TASKBOARD_" $k) }}
@@ -161,6 +178,12 @@ env:
     valueFrom:
       secretKeyRef:
         {{- include "agents-taskboard.delegateRef" . | nindent 8 }}
+  {{- end }}
+  {{- if and (eq $component "notifier") (include "agents-taskboard.usageEnabled" .) }}
+  - name: TASKBOARD_USAGE_TOKEN
+    valueFrom:
+      secretKeyRef:
+        {{- include "agents-taskboard.usageRef" . | nindent 8 }}
   {{- end }}
   {{- if and (eq $component "delegate") (include "agents-taskboard.mindmapEnabled" .) }}
   - name: TASKBOARD_MINDMAP_TOKENS
