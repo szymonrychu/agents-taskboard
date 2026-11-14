@@ -158,6 +158,26 @@ async def test_queue_state_reflects_head_hold_reason(service_client, web_client,
     assert [i["hold_reason"] for i in project["items"]] == ["usage_unknown", "at_limit"]
 
 
+async def test_queue_stale_autostart_off_hold_maps_to_ready(service_client, web_client, conn):
+    a = await spec_in(service_client, "a", "plan-a")
+    configure(conn, "a")
+    queue_row(conn, a, "a", 1, hold_reason="autostart_off")
+    r = await web_client.get(QUEUE, params={"project": "a"})
+    assert r.status_code == 200, r.text
+    (project,) = r.json()["projects"]
+    assert project["state"] == "ready"
+
+
+async def test_hold_reasons_all_valid_states(service_client, web_client, conn):
+    from typing import get_args
+
+    from agents_taskboard.db.spec_starts import HOLD_REASONS
+
+    states = set(get_args(schemas.AutostartState))
+    for hold in HOLD_REASONS:
+        assert hold in states or hold == "autostart_off"
+
+
 async def make_queue(service_client, conn, n=3, project="a") -> list[int]:
     ids = []
     for i in range(n):
@@ -212,6 +232,22 @@ async def test_move_non_queued_409(service_client, web_client, conn):
     done = queue_row(conn, key, "a", None, status="handled")
     r = await web_client.post(f"{QUEUE}/{done}/move", json={"position": 1})
     assert r.status_code == 409 and r.json()["error"]["code"] == "not_queued"
+
+
+async def test_move_in_progress_409(service_client, web_client, conn):
+    key = await spec_in(service_client, "a", "plan-y")
+    busy = queue_row(conn, key, "a", None, status="in_progress")
+    r = await web_client.post(f"{QUEUE}/{busy}/move", json={"position": 1})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "not_queued"
+
+
+async def test_move_response_with_stale_autostart_off_hold(service_client, web_client, conn):
+    one, two = await make_queue(service_client, conn, n=2)
+    configure(conn, "a")
+    conn.execute("UPDATE spec_starts SET hold_reason = 'autostart_off' WHERE id = %s", (one,))
+    r = await web_client.post(f"{QUEUE}/{one}/move", json={"position": 1})
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] == "ready"
 
 
 async def test_move_needs_exactly_one_target_422(service_client, web_client, conn):

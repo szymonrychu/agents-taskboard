@@ -27,6 +27,7 @@ from agents_taskboard.api.tasks import pool_of
 from agents_taskboard.db import project_settings as settings_repo
 from agents_taskboard.db import spec_starts as repo
 from agents_taskboard.db.events import append_spec_event, notify_spec_changed
+from agents_taskboard.db.spec_starts import HOLD_REASONS
 
 
 async def project_queues(
@@ -58,7 +59,9 @@ async def project_queues(
         elif not queue:
             state = "idle"
         else:
-            state = queue[0]["hold_reason"] or "ready"
+            # a hold stored before the project was configured (autostart_off) is stale: ready
+            hold = queue[0]["hold_reason"]
+            state = hold if hold in HOLD_REASONS and hold != "autostart_off" else "ready"
         out.append(
             {
                 "project": name,
@@ -140,11 +143,13 @@ def build_autostart_router(actor_dep: Callable[..., Actor], *, user_routes: bool
             return Response(status_code=204)
 
         @router.get("/projects/{slug}/autostart", response_model=AutostartView)
+        # actor_dep is the auth gate for the route, the value itself is unused
         async def get_autostart(slug: str, request: Request, actor: ActorDep) -> dict[str, Any]:
             async with pool_of(request).connection() as conn:
                 return settings_view(await settings_repo.get_settings(conn, slug))
 
         @router.put("/projects/{slug}/autostart", response_model=AutostartView)
+        # actor_dep is the auth gate for the route, the value itself is unused
         async def put_autostart(
             slug: str, body: AutostartPut, request: Request, actor: ActorDep
         ) -> dict[str, Any]:
