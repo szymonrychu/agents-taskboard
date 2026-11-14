@@ -8,6 +8,7 @@ stale reading still counts, an absent window is None.
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -15,7 +16,15 @@ from datetime import UTC, datetime
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictFloat, StrictInt, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    ValidationError,
+    field_validator,
+)
 
 __all__ = ["CURRENT_PATH", "GATED", "UsageClient", "UsageReading", "usage_gate"]
 
@@ -37,6 +46,14 @@ class _Window(BaseModel):
     percent: StrictFloat | StrictInt
     resets_at: datetime
     stale: StrictBool = False
+
+    @field_validator("percent")
+    @classmethod
+    def _sane_percent(cls, value: float) -> float:
+        # NaN would read "ok" in the gate (NaN >= limit is False): a corrupt body fails closed.
+        if not math.isfinite(value) or not 0 <= value <= 100:
+            raise ValueError("percent must be finite and within 0..100")
+        return value
 
 
 class _Current(BaseModel):
@@ -82,7 +99,9 @@ class UsageClient:
         self._clock = clock
         self._now = now
         self._client = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {token}"}, timeout=timeout, transport=transport
+            headers={"Authorization": f"Bearer {token.strip()}"},
+            timeout=timeout,
+            transport=transport,
         )
         self._lock = asyncio.Lock()
         self._fetched_at: float | None = None

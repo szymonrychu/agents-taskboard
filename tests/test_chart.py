@@ -352,6 +352,13 @@ def test_usage_existing_secret_referenced():
     }
 
 
+def test_usage_token_and_existing_secret_together_fail():
+    both = {"url": "http://usage.agents.svc", "token": USAGE_TOKEN, "existingSecret": "x"}
+    proc = _run(_merge(BASE, {"usage": both}))
+    assert proc.returncode != 0
+    assert "set only one of the usage token" in proc.stderr
+
+
 def test_usage_absent_by_default():
     docs = render()
     assert "TASKBOARD_USAGE_URL" not in of_kind(docs, "ConfigMap")[0]["data"]

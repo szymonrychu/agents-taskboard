@@ -1,5 +1,6 @@
 """UsageClient and usage_gate against a mock agents-usage."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -100,6 +101,21 @@ async def test_success_is_cached_within_window():
         httpx.Response(200, content=b"not json"),
         httpx.Response(200, json={"windows": "nope"}),
         httpx.Response(200, json={"windows": {"five_hour": {"percent": "x"}}}),
+        httpx.Response(
+            200,
+            content=(
+                b'{"windows": {"five_hour": {"percent": NaN, "resets_at": "2099-01-01T00:00:00Z"}}}'
+            ),
+        ),
+        httpx.Response(
+            200,
+            content=(
+                b'{"windows": {"five_hour": {"percent": Infinity, '
+                b'"resets_at": "2099-01-01T00:00:00Z"}}}'
+            ),
+        ),
+        httpx.Response(200, json={"windows": {"five_hour": window(-1.0)}}),
+        httpx.Response(200, json={"windows": {"five_hour": window(100.5)}}),
     ],
 )
 async def test_non_200_and_malformed_are_none(response):
@@ -124,12 +140,62 @@ async def test_sends_bearer_token_and_path():
 
 async def test_failure_log_has_no_url_or_token(caplog):
     def handler(request):
-        raise httpx.ConnectError("boom http://usage.test/secret-path")
+        raise httpx.ConnectError(f"boom http://usage.test/secret-path {TOKEN}")
 
     c = client(handler)
     with caplog.at_level("DEBUG"):
         await c.current()
     assert "secret-path" not in caplog.text and TOKEN not in caplog.text
+    await c.aclose()
+
+
+async def test_token_is_stripped_in_bearer():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"windows": {}})
+
+    c = UsageClient(
+        "http://usage.test", TOKEN + "\n", transport=httpx.MockTransport(handler), now=lambda: NOW
+    )
+    await c.current()
+    assert seen[0].headers["authorization"] == f"Bearer {TOKEN}"
+    await c.aclose()
+
+
+async def test_timeout_is_none(caplog):
+    async def handler(request):
+        await asyncio.sleep(5)
+        return httpx.Response(200, json={"windows": {}})
+
+    c = UsageClient(
+        "http://usage.test",
+        TOKEN,
+        timeout=0.05,
+        transport=httpx.MockTransport(handler),
+        now=lambda: NOW,
+    )
+    with caplog.at_level("DEBUG"):
+        assert await c.current() is None
+    assert TOKEN not in caplog.text
+    await c.aclose()
+
+
+async def test_concurrent_current_sends_one_request():
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        await asyncio.sleep(0.05)
+        return httpx.Response(
+            200, json={"windows": {"five_hour": window(1), "seven_day": window(2)}}
+        )
+
+    c = client(handler)
+    results = await asyncio.gather(*(c.current() for _ in range(5)))
+    assert len(calls) == 1
+    assert all(r == UsageReading(1.0, 2.0) for r in results)
     await c.aclose()
 
 
