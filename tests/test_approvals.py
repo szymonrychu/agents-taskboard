@@ -167,3 +167,11 @@ async def test_service_listener_has_no_batch_answer(service_client):
         f"{PREFIX}/approvals/answer", json={"items": [{"id": 1, "verdict": "go"}]}, headers=agent()
     )
     assert r.status_code == 404
+
+
+async def test_ask_question_replay_of_approval_key_refused(service_client):
+    key = (await create(service_client))["key"]
+    a = await ask_approval(service_client, key, client_key="k1")
+    assert a.status_code == 201
+    r = await ask(service_client, key, client_key="k1")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "client_key_conflict"

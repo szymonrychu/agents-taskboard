@@ -6132,6 +6132,16 @@
             },
             "description": "no such task, decision or todo item (not_found)"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the decision is not open (already_answered, expired, not_open, client_key_conflict)"
+          },
           "422": {
             "content": {
               "application/json": {

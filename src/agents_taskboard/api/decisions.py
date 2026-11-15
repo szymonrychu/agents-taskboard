@@ -35,6 +35,10 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
         except tasks_repo.NotFound:
             raise ApiError(404, "not_found", f"no task {key}") from None
         if not created:
+            if decision.kind != "question":
+                raise ApiError(
+                    409, "client_key_conflict", "client_key: already used by an approval decision"
+                )
             response.status_code = 200
         return decision.as_json(public_url(request))
 

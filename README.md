@@ -98,7 +98,7 @@ Change one todo item (`text`, `status`). `404 not_found` for an unknown item.
 
 ### `POST /taskboard/api/v1/tasks/{key}/decisions`
 
-Ask a decision (agents only, `403 agent_required` for a user): `question`, `context`, `options` (2..8, each with `label`, `description`, `recommended`), `client_key`. `201`.
+Ask a decision (agents only, `403 agent_required` for a user): `question`, `context`, `options` (2..8, each with `label`, `description`, `recommended`), `client_key` (a key the session already used for an approval is `409 client_key_conflict`). `201`, `200` on a replay.
 
 ### `POST /taskboard/api/v1/tasks/{key}/approvals`
 
