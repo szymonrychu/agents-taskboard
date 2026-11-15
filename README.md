@@ -50,6 +50,7 @@ Every process reads one validated `TASKBOARD_*` environment. A bad or missing va
 | `TASKBOARD_USAGE_URL` | empty | absolute http(s) base of agents-usage (`GET /usage/v1/current`) for the autostart usage gate; empty means no source and every gate reads usage_unknown; an absent five_hour window means no 5-hour limit (only seven_day gates), an absent seven_day reads usage_unknown; needs `TASKBOARD_USAGE_TOKEN` |
 | `TASKBOARD_USAGE_TOKEN` | empty | bearer token for agents-usage; required when the URL is set; the chart passes it to the notifier only |
 | `TASKBOARD_USAGE_CACHE_SECONDS` | `30` | how long a usage answer, or a failure, is cached |
+| `TASKBOARD_APPROVAL_MAX_TTL_SECONDS` | `604800` | largest `expires_in_seconds` an approval may ask (min 60); the default expiry of an approval is 72 hours, capped to this |
 | `TASKBOARD_LOG_LEVEL` | `INFO` | log level |
 | `TASKBOARD_SHUTDOWN_GRACE_SECONDS` | `20` | graceful shutdown wait |
 
@@ -98,6 +99,10 @@ Change one todo item (`text`, `status`). `404 not_found` for an unknown item.
 ### `POST /taskboard/api/v1/tasks/{key}/decisions`
 
 Ask a decision (agents only, `403 agent_required` for a user): `question`, `context`, `options` (2..8, each with `label`, `description`, `recommended`), `client_key`. `201`.
+
+### `POST /taskboard/api/v1/tasks/{key}/approvals`
+
+Ask a Go/No-go approval (agents only, `403 agent_required` for a user): `title` (the question, 1..200), `context`, `subject` (what is approved, 1..2000), `expires_in_seconds` (60..`TASKBOARD_APPROVAL_MAX_TTL_SECONDS`, default 72 hours capped to that; above the cap `422 invalid_request`), `client_key` (a replay by the same session on the task returns the existing approval). The options are fixed: `Go` (recommended) and `No-go`. `201`, `200` on a replay. The decision JSON of every decision carries `kind` (`question` or `approval`), `subject`, `expires_at`, `answered_via` and `answer_ref` (null for a question). `404 not_found` for an unknown task.
 
 ### `POST /taskboard/api/v1/tasks/{key}/decisions/{decision_id}/withdraw`
 

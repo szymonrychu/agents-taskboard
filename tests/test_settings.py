@@ -133,6 +133,7 @@ def test_usage_defaults_empty(monkeypatch):
     assert s.usage_url == ""
     assert s.usage_token.get_secret_value() == ""
     assert s.usage_cache_seconds == 30.0
+    assert s.approval_max_ttl_seconds == 604800
 
 
 def test_usage_url_requires_token(monkeypatch):

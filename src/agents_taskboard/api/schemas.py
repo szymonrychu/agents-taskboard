@@ -146,6 +146,14 @@ class DecisionAnswer(_Strict):
         return self
 
 
+class ApprovalCreate(_Strict):
+    title: str = Field(min_length=1, max_length=200)
+    context: str = Field(default="", max_length=8000)
+    subject: str | None = Field(default=None, min_length=1, max_length=2000)
+    expires_in_seconds: int | None = Field(default=None, ge=60)
+    client_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+
 class DecisionWithdraw(_Strict):
     reason: str = Field(min_length=1, max_length=2000)
     superseded_by: int | None = Field(default=None, ge=1)

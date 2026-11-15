@@ -20,6 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from agents_taskboard.api.actors import actor_from_service, actor_from_web
+from agents_taskboard.api.approvals import build_approval_router
 from agents_taskboard.api.autostart import build_autostart_router
 from agents_taskboard.api.decisions import build_router as build_decision_router
 from agents_taskboard.api.errors import ApiError, error_response
@@ -160,6 +161,7 @@ def _user_app(
     app.include_router(build_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_todo_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_decision_router(actor_from_web, answerable=True), prefix=PREFIX)
+    app.include_router(build_approval_router(actor_from_web, answerable=True), prefix=PREFIX)
     app.include_router(build_projects_router(actor_from_web), prefix=PREFIX)
     app.include_router(build_autostart_router(actor_from_web, user_routes=True), prefix=PREFIX)
     app.include_router(build_spec_router(actor_from_web, user_routes=True), prefix=PREFIX)
@@ -213,6 +215,7 @@ def create_service_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI
     app.include_router(build_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_todo_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_decision_router(actor_from_service), prefix=PREFIX)
+    app.include_router(build_approval_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_projects_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_autostart_router(actor_from_service, user_routes=False), prefix=PREFIX)
     app.include_router(build_spec_router(actor_from_service, user_routes=False), prefix=PREFIX)

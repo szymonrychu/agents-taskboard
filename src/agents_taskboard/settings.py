@@ -29,6 +29,7 @@ class Settings(BaseServiceSettings):
     usage_url: str = ""
     usage_token: SecretStr = Field(SecretStr(""), repr=False)
     usage_cache_seconds: float = Field(30.0, gt=0)
+    approval_max_ttl_seconds: int = Field(604800, ge=60)
 
     @field_validator("allowed_cidrs")
     @classmethod

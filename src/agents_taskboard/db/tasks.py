@@ -468,6 +468,7 @@ async def load_tasks(
             "SELECT d.id, d.task_id, d.asking_session, d.asking_slug, d.question, d.context,"
             " d.options, d.status, d.answer, d.note, d.created_at, d.answered_at,"
             " d.withdraw_reason, d.superseded_by, d.answered_elsewhere,"
+            " d.kind, d.subject, d.expires_at, d.answered_via, d.answer_ref,"
             " s.task_id AS superseded_by_task_id FROM decisions d"
             " LEFT JOIN decisions s ON s.id = d.superseded_by"
             " WHERE d.task_id = ANY(%s) ORDER BY d.id",

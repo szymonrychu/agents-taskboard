@@ -79,6 +79,7 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("put", "/tasks/{key}/todo"): (403, 404, 422),
     ("patch", "/tasks/{key}/todo/{item_id}"): (403, 404, 422),
     ("post", "/tasks/{key}/decisions"): (403, 404, 422),
+    ("post", "/tasks/{key}/approvals"): (403, 404, 422),
     ("post", "/tasks/{key}/decisions/{decision_id}/withdraw"): (403, 404, 409, 422),
     ("post", "/tasks/{key}/decisions/{decision_id}/answer"): (403, 404, 409, 422),
     ("get", "/specs"): (403, 422),

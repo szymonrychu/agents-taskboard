@@ -25,8 +25,14 @@ USER = Actor(kind="user")
 _COLUMNS = (
     "d.id, d.task_id, d.asking_session, d.asking_slug, d.question, d.context, d.options,"
     " d.client_key, d.status, d.answer, d.note, d.created_at, d.answered_at,"
-    " d.withdraw_reason, d.superseded_by, d.answered_elsewhere, d.superseded_by_task_id"
+    " d.withdraw_reason, d.superseded_by, d.answered_elsewhere, d.superseded_by_task_id,"
+    " d.kind, d.subject, d.expires_at, d.answered_via, d.answer_ref"
 )
+DEFAULT_APPROVAL_TTL_SECONDS = 259200
+APPROVAL_OPTIONS: list[dict[str, Any]] = [
+    {"label": "Go", "description": None, "recommended": True},
+    {"label": "No-go", "description": None, "recommended": False},
+]
 _FROM = (
     "(SELECT x.*, s.task_id AS superseded_by_task_id FROM decisions x"
     " LEFT JOIN decisions s ON s.id = x.superseded_by) d"
@@ -52,6 +58,11 @@ class Decision:
     superseded_by: int | None
     answered_elsewhere: str | None
     superseded_by_task_id: int | None
+    kind: str
+    subject: str | None
+    expires_at: datetime | None
+    answered_via: str | None
+    answer_ref: str | None
 
     def as_json(self, public_url: str) -> dict[str, Any]:
         out = asdict(self)
@@ -85,6 +96,10 @@ async def ask_decision(
     context: str,
     options: list[dict[str, Any]],
     client_key: str | None,
+    *,
+    kind: str = "question",
+    subject: str | None = None,
+    ttl_seconds: int | None = None,
 ) -> tuple[Decision, bool]:
     """Insert an open decision; returns (decision, created). A replayed (task, asking session,
     client key) returns the existing decision. Raises NotFound for an absent task or one outside
@@ -94,7 +109,9 @@ async def ask_decision(
         await touch_task(conn, actor, task_id)
         cur = await conn.execute(
             "INSERT INTO decisions (task_id, asking_session, asking_slug, question, context,"
-            " options, client_key, status) VALUES (%s, %s, %s, %s, %s, %s, %s, 'open')"
+            " options, client_key, status, kind, subject, expires_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, 'open', %s, %s,"
+            " CASE WHEN %s::int IS NULL THEN NULL ELSE now() + make_interval(secs => %s) END)"
             " ON CONFLICT DO NOTHING RETURNING id",
             (
                 task_id,
@@ -104,6 +121,10 @@ async def ask_decision(
                 context,
                 Jsonb(options),
                 client_key,
+                kind,
+                subject,
+                ttl_seconds,
+                ttl_seconds,
             ),
         )
         row = await cur.fetchone()
@@ -118,7 +139,10 @@ async def ask_decision(
             assert row is not None
         decision_id = row[0]
         if created:
-            await append_event(conn, task_id, actor, "decision_asked", {"decision_id": decision_id})
+            detail: dict[str, Any] = {"decision_id": decision_id}
+            if kind == "approval":
+                detail["kind"] = "approval"
+            await append_event(conn, task_id, actor, "decision_asked", detail)
             await notify_changed(conn, task_id)
         decision = await get_decision(conn, actor, decision_id)
         assert decision is not None
