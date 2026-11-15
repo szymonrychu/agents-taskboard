@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 import httpx
-from test_api_tasks import S1, TASKS, agent, create
+from test_api_tasks import S1, S2, TASKS, agent, create
 from test_decisions import WITHDRAW, ask, make
 
 from agents_taskboard.api.app import PREFIX
@@ -175,3 +175,43 @@ async def test_ask_question_replay_of_approval_key_refused(service_client):
     assert a.status_code == 201
     r = await ask(service_client, key, client_key="k1")
     assert r.status_code == 409 and r.json()["error"]["code"] == "client_key_conflict"
+
+
+async def test_list_open_approvals_for_user(service_client, web_client):
+    key = (await create(service_client, title="deploy web"))["key"]
+    a = (await ask_approval(service_client, key, client_key="a")).json()["id"]
+    b = (await ask_approval(service_client, key, client_key="b", expires_in_seconds=3600)).json()[
+        "id"
+    ]
+    c = (await ask_approval(service_client, key, headers=agent(S2, slug="mx-2"))).json()["id"]
+    await ask(service_client, key)  # a question is never listed
+    items = (await web_client.get(f"{PREFIX}/approvals")).json()["items"]
+    assert [i["id"] for i in items] == [b, a, c]  # soonest expiry first, then id
+    assert {(i["kind"], i["task_title"], i["project"]) for i in items} == {
+        ("approval", "deploy web", "default")
+    }
+    only = (await web_client.get(f"{PREFIX}/approvals", params={"session": S2})).json()["items"]
+    assert [i["id"] for i in only] == [c]
+
+
+async def test_list_hides_expired_from_open(service_client, web_client, conn):
+    key = (await create(service_client))["key"]
+    did = (await ask_approval(service_client, key)).json()["id"]
+    conn.execute(
+        "UPDATE decisions SET expires_at = now() - interval '1 second' WHERE id = %s", (did,)
+    )
+    assert (await web_client.get(f"{PREFIX}/approvals")).json()["items"] == []
+    all_ = (await web_client.get(f"{PREFIX}/approvals", params={"status": "all"})).json()["items"]
+    assert [i["id"] for i in all_] == [did]
+
+
+async def test_agent_lists_only_own(service_client):
+    key = (await create(service_client))["key"]
+    await ask_approval(service_client, key)
+    mine = (await ask_approval(service_client, key, headers=agent(S2))).json()["id"]
+    r = await service_client.get(f"{PREFIX}/approvals", params={"session": S1}, headers=agent(S2))
+    assert [i["id"] for i in r.json()["items"]] == [mine]
+
+
+async def test_list_bad_status_422(web_client):
+    assert (await web_client.get(f"{PREFIX}/approvals", params={"status": "x"})).status_code == 422

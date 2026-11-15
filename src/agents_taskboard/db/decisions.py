@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 import psycopg
-from psycopg.rows import class_row
+from psycopg.rows import class_row, dict_row
 from psycopg.types.json import Jsonb
 
 from agents_taskboard.api.actors import Actor
@@ -270,3 +270,42 @@ async def answer_approval(
     if decision is not None:
         return "answered", decision
     return await unanswerable_reason(conn, decision_id), await get_decision(conn, USER, decision_id)
+
+
+async def list_approvals(
+    conn: psycopg.AsyncConnection,
+    actor: Actor,
+    *,
+    status: str,
+    session: str | None,
+    project: str | None,
+    limit: int,
+) -> list[tuple[Decision, str, str]]:
+    """Approvals (never questions) on the actor's tasks as (decision, task title, task project),
+    soonest expiry first. `open` also requires an unexpired `expires_at`; `all` is no status
+    filter."""
+    scope, params = scoped(actor)
+    where = f"d.kind = 'approval'{scope}"
+    if status == "open":
+        where += " AND d.status = 'open' AND d.expires_at > now()"
+    elif status != "all":
+        where += " AND d.status = %s"
+        params.append(status)
+    if session is not None:
+        where += " AND d.asking_session = %s"
+        params.append(session)
+    if project is not None:
+        where += " AND t.project = %s"
+        params.append(project)
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        f"SELECT {_COLUMNS}, t.title AS task_title, t.project AS task_project"
+        f" FROM {_FROM} JOIN tasks t ON t.id = d.task_id WHERE {where}"
+        " ORDER BY d.expires_at, d.id LIMIT %s",
+        (*params, limit),
+    )
+    out = []
+    for row in await cur.fetchall():
+        title, proj = row.pop("task_title"), row.pop("task_project")
+        out.append((Decision(**row), title, proj))
+    return out

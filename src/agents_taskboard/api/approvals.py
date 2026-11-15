@@ -3,9 +3,9 @@ fixed options and a mandatory expiry. Asking is mounted on every listener (agent
 the batch answer exists only on the user listeners (web and delegate)."""
 
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.api.errors import ApiError
@@ -57,6 +57,28 @@ def build_approval_router(
                 )
             response.status_code = 200
         return decision.as_json(public_url(request))
+
+    @router.get("/approvals")
+    async def list_approvals(
+        request: Request,
+        actor: ActorDep,
+        status: Literal["open", "answered", "withdrawn", "expired", "all"] = "open",
+        session: str | None = None,
+        project: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    ) -> dict[str, Any]:
+        if actor.kind == "agent":
+            session = actor.session_id  # an agent sees only the approvals it asked
+        async with pool_of(request).connection() as conn:
+            rows = await repo.list_approvals(
+                conn, actor, status=status, session=session, project=project, limit=limit
+            )
+        url = public_url(request)
+        return {
+            "items": [
+                {**d.as_json(url), "task_title": title, "project": proj} for d, title, proj in rows
+            ]
+        }
 
     if answerable:
 

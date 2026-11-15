@@ -738,3 +738,34 @@ async def test_gate_approvable_and_open_decisions(service_client, web_client):
         assert r.status_code == 200, r.text
     g = await gate(service_client, key)
     assert (g["approvable"], g["open_decisions"]) == (True, [])
+
+
+async def test_open_approval_does_not_block_gate_or_approve(service_client, web_client):
+    key = await make_spec(service_client)
+    own = (
+        await service_client.post(TASKS, json={"title": "own", "spec": key}, headers=agent())
+    ).json()["key"]
+    r = await service_client.post(
+        f"{TASKS}/{own}/approvals", json={"title": "deploy?"}, headers=agent()
+    )
+    assert r.status_code == 201, r.text
+    g = await gate(service_client, key)
+    assert (g["gate"], g["decisions"], g["approvable"], g["open_decisions"]) == (
+        "none",
+        [],
+        True,
+        [],
+    )
+    q = await ask(service_client, own, "Q1?")
+    assert (await gate(service_client, key))["approvable"] is False
+    member = agent(projects="default")  # not a superleader
+    v = (await service_client.get(f"{SPECS}/{key}", headers=member)).json()["version"]
+    r = await service_client.patch(
+        f"{SPECS}/{key}", json={"status": "approved", "version": v}, headers=member
+    )
+    assert r.status_code == 409 and r.json()["error"]["code"] == "decisions_open"
+    await web_client.post(f"{TASKS}/{own}/decisions/{q}/answer", json={"choice": 0})
+    r = await service_client.patch(
+        f"{SPECS}/{key}", json={"status": "approved", "version": v}, headers=member
+    )
+    assert r.status_code == 200, r.text  # the open approval does not block

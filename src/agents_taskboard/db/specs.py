@@ -629,13 +629,14 @@ async def list_specs(
 
 async def open_spec_decisions(conn: psycopg.AsyncConnection, spec_id: int) -> list[dict[str, Any]]:
     """The open decisions on the spec's linked tasks whose status is open or in_progress (plan
-    steps are tasks and count), as `{task, id, question}` by task id then decision id. The one
+    steps are tasks and count; approvals never gate), as `{task, id, question}` by task id then
+    decision id. The one
     query behind the agent approval check and the gate's `approvable`."""
     cur = await conn.cursor(row_factory=dict_row).execute(
         "SELECT 'T-' || t.id AS task, d.id, d.question FROM decisions d"
         " JOIN tasks t ON t.id = d.task_id"
         " WHERE t.spec_id = %s AND t.status IN ('open', 'in_progress') AND d.status = 'open'"
-        " ORDER BY t.id, d.id",
+        " AND d.kind = 'question' ORDER BY t.id, d.id",
         (spec_id,),
     )
     return list(await cur.fetchall())

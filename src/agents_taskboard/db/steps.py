@@ -810,7 +810,7 @@ async def get_gate(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) ->
     if gate_id is not None:
         cur = await conn.cursor(row_factory=dict_row).execute(
             "SELECT id, question, status, answer FROM decisions"
-            " WHERE task_id = %s AND status <> 'withdrawn' ORDER BY id",
+            " WHERE task_id = %s AND status <> 'withdrawn' AND kind = 'question' ORDER BY id",
             (gate_id,),
         )
         decisions = list(await cur.fetchall())
