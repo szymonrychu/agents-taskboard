@@ -1,5 +1,6 @@
-"""Decision routes. Asking and withdrawing are mounted on both apps (agents only); answering
-exists only on the web app, so the service app has no such route."""
+"""Decision routes. Asking and withdrawing are mounted on every app (agents only); answering
+exists only on the user apps (web and delegate), so the service app has no such route. An
+approval answers by choice only (0 Go, 1 No-go)."""
 
 from collections.abc import Callable
 from typing import Annotated, Any
@@ -77,6 +78,10 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
                 current = await repo.get_decision(conn, actor, decision_id)
                 if current is None or current.task_id != task_id:
                     raise ApiError(404, "not_found", f"no decision {decision_id} on {key}")
+                if current.kind == "approval" and body.choice is None:
+                    raise ApiError(
+                        422, "invalid_request", "approval: answer with choice 0 (Go) or 1 (No-go)"
+                    )
                 if body.choice is not None:
                     if body.choice >= len(current.options):
                         raise ApiError(422, "invalid_request", "choice: no such option")
@@ -86,9 +91,14 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
                     }
                 else:
                     given = {"text": body.text}
-                decision = await repo.answer_decision(conn, decision_id, given, body.note)
-            if decision is None:
-                raise ApiError(409, "already_answered", f"decision is already {current.status}")
-            return decision.as_json(public_url(request))
+                decision = await repo.answer_decision(
+                    conn, decision_id, given, body.note, via=actor.via or "web"
+                )
+                if decision is not None:
+                    return decision.as_json(public_url(request))
+                reason = await repo.unanswerable_reason(conn, decision_id)
+            if reason == "expired":
+                raise ApiError(409, "expired", "decision has expired")
+            raise ApiError(409, "already_answered", f"decision is already {reason}")
 
     return router

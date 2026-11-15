@@ -4,7 +4,8 @@ import json
 
 import httpx
 from conftest import BASE_URL, DELEGATE_TOKEN
-from test_api_tasks import S1, TASKS, agent
+from test_api_tasks import S1, TASKS, agent, create
+from test_approvals import ask_approval
 from test_decisions import OPTS, WITHDRAW, ask, dec_url
 from test_stream import open_stream, serve
 
@@ -117,3 +118,39 @@ async def test_healthz_is_exempt_from_the_gate(settings, pool):
     ) as client:
         assert (await client.get("/healthz")).status_code == 200
         assert (await client.get("/readyz")).status_code == 200
+
+
+async def test_delegate_batch_records_source_and_ref(delegate_client, service_client):
+    key = (await create(service_client))["key"]
+    did = (await ask_approval(service_client, key)).json()["id"]
+    r = await delegate_client.post(
+        f"{PREFIX}/approvals/answer",
+        json={
+            "source": "matrix",
+            "items": [{"id": did, "verdict": "no_go", "answer_ref": "$ev1"}],
+        },
+    )
+    assert r.json()["items"] == [{"id": did, "result": "answered", "task_key": key}]
+    d = (await delegate_client.get(f"{TASKS}/{key}")).json()["decisions"][0]
+    assert (d["answered_via"], d["answer_ref"], d["answer"]["label"]) == (
+        "delegate:matrix",
+        "$ev1",
+        "No-go",
+    )
+
+
+async def test_delegate_single_answer_records_via_delegate(delegate_client, service_client):
+    key = (await create(service_client))["key"]
+    did = (await ask_approval(service_client, key)).json()["id"]
+    r = await delegate_client.post(dec_url(key, did, "answer"), json={"choice": 0})
+    assert r.status_code == 200 and r.json()["answered_via"] == "delegate"
+
+
+async def test_delegate_batch_without_source_is_delegate(delegate_client, service_client):
+    key = (await create(service_client))["key"]
+    did = (await ask_approval(service_client, key)).json()["id"]
+    await delegate_client.post(
+        f"{PREFIX}/approvals/answer", json={"items": [{"id": did, "verdict": "go"}]}
+    )
+    d = (await delegate_client.get(f"{TASKS}/{key}")).json()["decisions"][0]
+    assert (d["answered_via"], d["answer_ref"]) == ("delegate", None)

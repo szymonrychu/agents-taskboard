@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import psycopg
 from psycopg.rows import class_row
@@ -17,7 +17,7 @@ from psycopg.types.json import Jsonb
 
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.db.events import append_event, notify_changed
-from agents_taskboard.db.notices import enqueue_decision_notice
+from agents_taskboard.db.notices import enqueue_approval_notice, enqueue_decision_notice
 from agents_taskboard.db.scope import scoped
 from agents_taskboard.db.tasks import task_key, task_url, touch_task
 
@@ -33,6 +33,8 @@ APPROVAL_OPTIONS: list[dict[str, Any]] = [
     {"label": "Go", "description": None, "recommended": True},
     {"label": "No-go", "description": None, "recommended": False},
 ]
+VERDICT_CHOICE = {"go": 0, "no_go": 1}
+ApprovalResult = Literal["answered", "already_answered", "expired", "withdrawn", "not_found"]
 _FROM = (
     "(SELECT x.*, s.task_id AS superseded_by_task_id FROM decisions x"
     " LEFT JOIN decisions s ON s.id = x.superseded_by) d"
@@ -195,22 +197,76 @@ async def withdraw_decision(
 
 
 async def answer_decision(
-    conn: psycopg.AsyncConnection, decision_id: int, answer: Any, note: str | None
+    conn: psycopg.AsyncConnection,
+    decision_id: int,
+    answer: Any,
+    note: str | None,
+    *,
+    via: str = "web",
+    answer_ref: str | None = None,
 ) -> Decision | None:
-    """Answer an open decision as a user, once. None when it was already answered or withdrawn.
-    Event, notice for the asking session and NOTIFY share the transaction."""
+    """Answer an open, unexpired decision as a user, once, recording the channel (`via`) and its
+    reference. None when it was already answered, withdrawn or expired. Event, notice for the
+    asking session (one per approval, folded per task for a question) and NOTIFY share the
+    transaction."""
     async with conn.transaction():
         cur = await conn.execute(
-            "UPDATE decisions SET status = 'answered', answer = %s, note = %s, answered_at = now()"
-            " WHERE id = %s AND status = 'open' RETURNING asking_session, task_id",
-            (Jsonb(answer), note, decision_id),
+            "UPDATE decisions SET status = 'answered', answer = %s, note = %s, answered_at = now(),"
+            " answered_via = %s, answer_ref = %s"
+            " WHERE id = %s AND status = 'open' AND (expires_at IS NULL OR expires_at > now())"
+            " RETURNING asking_session, task_id, kind",
+            (Jsonb(answer), note, via, answer_ref, decision_id),
         )
         row = await cur.fetchone()
         if row is None:
             return None
-        asking_session, task_id = row
+        asking_session, task_id, kind = row
         await touch_task(conn, USER, task_id)
         await append_event(conn, task_id, USER, "decision_answered", {"decision_id": decision_id})
-        await enqueue_decision_notice(conn, task_id, asking_session)
+        if kind == "approval":
+            await enqueue_approval_notice(conn, task_id, asking_session, decision_id)
+        else:
+            await enqueue_decision_notice(conn, task_id, asking_session)
         await notify_changed(conn, task_id)
         return await get_decision(conn, USER, decision_id)
+
+
+async def unanswerable_reason(
+    conn: psycopg.AsyncConnection, decision_id: int
+) -> Literal["already_answered", "expired", "withdrawn"]:
+    """Why an answer's guarded UPDATE matched no row: `expired` for an expired row or one still
+    open past its `expires_at`, `withdrawn`, else `already_answered`."""
+    cur = await conn.execute(
+        "SELECT status, expires_at IS NOT NULL AND expires_at <= now() FROM decisions"
+        " WHERE id = %s",
+        (decision_id,),
+    )
+    row = await cur.fetchone()
+    status, past = row if row is not None else ("answered", False)
+    if status == "expired" or (status == "open" and past):
+        return "expired"
+    if status == "withdrawn":
+        return "withdrawn"
+    return "already_answered"
+
+
+async def answer_approval(
+    conn: psycopg.AsyncConnection,
+    decision_id: int,
+    verdict: Literal["go", "no_go"],
+    note: str | None,
+    *,
+    via: str,
+    answer_ref: str | None,
+) -> tuple[ApprovalResult, Decision | None]:
+    """Answer an approval Go or No-go. `not_found` (no decision) when it is absent or not an
+    approval; otherwise the decision as it stands after the attempt."""
+    current = await get_decision(conn, USER, decision_id)
+    if current is None or current.kind != "approval":
+        return "not_found", None
+    choice = VERDICT_CHOICE[verdict]
+    given = {"choice": choice, "label": APPROVAL_OPTIONS[choice]["label"]}
+    decision = await answer_decision(conn, decision_id, given, note, via=via, answer_ref=answer_ref)
+    if decision is not None:
+        return "answered", decision
+    return await unanswerable_reason(conn, decision_id), await get_decision(conn, USER, decision_id)

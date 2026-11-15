@@ -2,9 +2,11 @@ import asyncio
 
 import psycopg
 from psycopg_pool import AsyncConnectionPool
-from test_api_tasks import TASKS
+from test_api_tasks import TASKS, create
+from test_approvals import ask_approval
 from test_decisions import WITHDRAW, dec_url, make
 
+from agents_taskboard.api.app import PREFIX
 from agents_taskboard.db import decisions as repo
 
 
@@ -66,3 +68,15 @@ async def test_answer_races_withdraw(service_client, web_client, pool: AsyncConn
         n = await (await c.execute("SELECT count(*) FROM notices")).fetchone()
     answered = task["decisions"][0]["status"] == "answered"
     assert n[0] == (1 if answered else 0)
+
+
+async def test_two_batch_answers_one_wins(service_client, web_client, conn):
+    key = (await create(service_client))["key"]
+    did = (await ask_approval(service_client, key)).json()["id"]
+    url = f"{PREFIX}/approvals/answer"
+    rs = await asyncio.gather(
+        web_client.post(url, json={"items": [{"id": did, "verdict": "go"}]}),
+        web_client.post(url, json={"items": [{"id": did, "verdict": "no_go"}]}),
+    )
+    assert sorted(r.json()["items"][0]["result"] for r in rs) == ["already_answered", "answered"]
+    assert conn.execute("SELECT count(*) FROM notices").fetchone()[0] == 1

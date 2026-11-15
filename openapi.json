@@ -39,6 +39,37 @@
         "title": "ActorRef",
         "type": "object"
       },
+      "ApprovalAnswerBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalVerdict"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9-]{0,39}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ApprovalAnswerBatch",
+        "type": "object"
+      },
       "ApprovalCreate": {
         "additionalProperties": false,
         "properties": {
@@ -97,6 +128,55 @@
           "title"
         ],
         "title": "ApprovalCreate",
+        "type": "object"
+      },
+      "ApprovalVerdict": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_ref": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Ref"
+          },
+          "id": {
+            "minimum": 1.0,
+            "title": "Id",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "verdict": {
+            "enum": [
+              "go",
+              "no_go"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "verdict"
+        ],
+        "title": "ApprovalVerdict",
         "type": "object"
       },
       "AutostartPut": {
@@ -3073,6 +3153,56 @@
         "summary": "Readyz"
       }
     },
+    "/taskboard/api/v1/approvals/answer": {
+      "post": {
+        "operationId": "answer_approvals_taskboard_api_v1_approvals_answer_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalAnswerBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Answer Approvals Taskboard Api V1 Approvals Answer Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "source address is not allowed (forbidden)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request)"
+          }
+        },
+        "summary": "Answer Approvals"
+      }
+    },
     "/taskboard/api/v1/projects/summary": {
       "get": {
         "operationId": "summary_taskboard_api_v1_projects_summary_get",
@@ -5850,6 +5980,16 @@
             },
             "description": "no such task, decision or todo item (not_found)"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the decision is not open (already_answered, expired, not_open, client_key_conflict)"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -6080,7 +6220,7 @@
                 }
               }
             },
-            "description": "the decision is not open (already_answered, not_open)"
+            "description": "the decision is not open (already_answered, expired, not_open, client_key_conflict)"
           },
           "422": {
             "content": {
@@ -6170,7 +6310,7 @@
                 }
               }
             },
-            "description": "the decision is not open (already_answered, not_open)"
+            "description": "the decision is not open (already_answered, expired, not_open, client_key_conflict)"
           },
           "422": {
             "content": {

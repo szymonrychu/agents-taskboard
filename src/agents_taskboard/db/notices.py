@@ -20,6 +20,19 @@ async def enqueue_decision_notice(
     )
 
 
+async def enqueue_approval_notice(
+    conn: psycopg.AsyncConnection, task_id: int, session_id: str, decision_id: int
+) -> None:
+    """Queue a regular-lane notice that an approval was answered. Unlike a question notice it is
+    one per approval (two approvals on a task each reach the session); a notice already pending
+    for the same approval absorbs this one."""
+    await conn.execute(
+        "INSERT INTO notices (task_id, session_id, reason, status, decision_id)"
+        " VALUES (%s, %s, 'approval', 'pending', %s) ON CONFLICT DO NOTHING",
+        (task_id, session_id, decision_id),
+    )
+
+
 async def enqueue_label_notice(
     conn: psycopg.AsyncConnection, task_id: int, session_id: str
 ) -> None:

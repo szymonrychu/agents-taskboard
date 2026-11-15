@@ -19,7 +19,12 @@ from psycopg_pool import AsyncConnectionPool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from agents_taskboard.api.actors import actor_from_service, actor_from_web
+from agents_taskboard.api.actors import (
+    Actor,
+    actor_from_delegate,
+    actor_from_service,
+    actor_from_web,
+)
 from agents_taskboard.api.approvals import build_approval_router
 from agents_taskboard.api.autostart import build_autostart_router
 from agents_taskboard.api.decisions import build_router as build_decision_router
@@ -136,12 +141,14 @@ def _user_app(
     pool: AsyncConnectionPool,
     title: str,
     add_gate: Callable[[FastAPI], None],
+    actor_dep: Callable[[], Actor],
     stream_poll_seconds: float,
     listen_fn: ListenFn,
 ) -> FastAPI:
-    """The user-actor app: the SSE stream, tasks, todos, decisions with the answer route and specs
-    with the user-only routes.
-    Only the admission gate differs between the web and the delegate listener."""
+    """The user-actor app: the SSE stream, tasks, todos, decisions and approvals with the answer
+    routes and specs with the user-only routes.
+    Only the admission gate and the actor's `via` differ between the web and the delegate
+    listener."""
     app = _base_app(settings, pool, title)
     app.state.hub = TaskChangeHub(
         settings.database_url.get_secret_value(), pool, stream_poll_seconds, listen_fn
@@ -158,14 +165,14 @@ def _user_app(
 
     app.router.lifespan_context = lifespan
     app.include_router(build_stream_router(), prefix=PREFIX)
-    app.include_router(build_router(actor_from_web), prefix=PREFIX)
-    app.include_router(build_todo_router(actor_from_web), prefix=PREFIX)
-    app.include_router(build_decision_router(actor_from_web, answerable=True), prefix=PREFIX)
-    app.include_router(build_approval_router(actor_from_web, answerable=True), prefix=PREFIX)
-    app.include_router(build_projects_router(actor_from_web), prefix=PREFIX)
-    app.include_router(build_autostart_router(actor_from_web, user_routes=True), prefix=PREFIX)
-    app.include_router(build_spec_router(actor_from_web, user_routes=True), prefix=PREFIX)
-    app.include_router(build_steps_router(actor_from_web), prefix=PREFIX)
+    app.include_router(build_router(actor_dep), prefix=PREFIX)
+    app.include_router(build_todo_router(actor_dep), prefix=PREFIX)
+    app.include_router(build_decision_router(actor_dep, answerable=True), prefix=PREFIX)
+    app.include_router(build_approval_router(actor_dep, answerable=True), prefix=PREFIX)
+    app.include_router(build_projects_router(actor_dep), prefix=PREFIX)
+    app.include_router(build_autostart_router(actor_dep, user_routes=True), prefix=PREFIX)
+    app.include_router(build_spec_router(actor_dep, user_routes=True), prefix=PREFIX)
+    app.include_router(build_steps_router(actor_dep), prefix=PREFIX)
     add_gate(app)
     return app
 
@@ -176,13 +183,15 @@ def create_web_app(
     stream_poll_seconds: float = DEFAULT_POLL_SECONDS,
     listen_fn: ListenFn = listen,
 ) -> FastAPI:
-    """The user-facing app: source allowlist, no bearer, the answer route and the SSE stream
+    """The user-facing app: source allowlist, no bearer, the answer routes and the SSE stream
     live here."""
 
     def gate(app: FastAPI) -> None:
         app.add_middleware(SourceAllowlist, networks=settings.api_networks())
 
-    return _user_app(settings, pool, "agents-taskboard", gate, stream_poll_seconds, listen_fn)
+    return _user_app(
+        settings, pool, "agents-taskboard", gate, actor_from_web, stream_poll_seconds, listen_fn
+    )
 
 
 def create_delegate_app(
@@ -203,14 +212,21 @@ def create_delegate_app(
         )
 
     app = _user_app(
-        settings, pool, "agents-taskboard-delegate", gate, stream_poll_seconds, listen_fn
+        settings,
+        pool,
+        "agents-taskboard-delegate",
+        gate,
+        actor_from_delegate,
+        stream_poll_seconds,
+        listen_fn,
     )
     app.include_router(build_external_router(), prefix=PREFIX)
     return app
 
 
 def create_service_app(settings: Settings, pool: AsyncConnectionPool) -> FastAPI:
-    """The relay-facing app: bearer gate, agent identity from forwarded headers, no answer route."""
+    """The relay-facing app: bearer gate, agent identity from forwarded headers, no answer
+    routes."""
     app = _base_app(settings, pool, "agents-taskboard-service")
     app.include_router(build_router(actor_from_service), prefix=PREFIX)
     app.include_router(build_todo_router(actor_from_service), prefix=PREFIX)

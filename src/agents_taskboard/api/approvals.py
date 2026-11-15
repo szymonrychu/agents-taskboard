@@ -1,5 +1,6 @@
 """Approval routes: an agent asks a Go/No-go approval on a task. An approval is a decision with
-fixed options and a mandatory expiry. Mounted on every listener (agents only ask)."""
+fixed options and a mandatory expiry. Asking is mounted on every listener (agents only ask);
+the batch answer exists only on the user listeners (web and delegate)."""
 
 from collections.abc import Callable
 from typing import Annotated, Any
@@ -8,16 +9,17 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from agents_taskboard.api.actors import Actor
 from agents_taskboard.api.errors import ApiError
-from agents_taskboard.api.schemas import ApprovalCreate
+from agents_taskboard.api.schemas import ApprovalAnswerBatch, ApprovalCreate
 from agents_taskboard.api.tasks import pool_of, public_url, task_id_of
 from agents_taskboard.db import decisions as repo
 from agents_taskboard.db import tasks as tasks_repo
+from agents_taskboard.db.tasks import task_key
 
 
 def build_approval_router(
     actor_dep: Callable[..., Actor], *, answerable: bool = False
 ) -> APIRouter:
-    """`answerable` marks the user listeners; the answer routes are added to it later."""
+    """`answerable` marks the user listeners, which carry the batch answer route."""
     router = APIRouter()
     ActorDep = Annotated[Actor, Depends(actor_dep)]
 
@@ -49,7 +51,31 @@ def build_approval_router(
         except tasks_repo.NotFound:
             raise ApiError(404, "not_found", f"no task {key}") from None
         if not created:
+            if decision.kind != "approval":
+                raise ApiError(
+                    409, "client_key_conflict", "client_key: already used by a question decision"
+                )
             response.status_code = 200
         return decision.as_json(public_url(request))
+
+    if answerable:
+
+        @router.post("/approvals/answer")
+        async def answer_approvals(
+            body: ApprovalAnswerBatch, request: Request, actor: ActorDep
+        ) -> dict[str, Any]:
+            if actor.via == "delegate" and body.source is not None:
+                via = f"delegate:{body.source}"
+            else:
+                via = actor.via or "web"
+            items = []
+            async with pool_of(request).connection() as conn:
+                for item in body.items:
+                    result, decision = await repo.answer_approval(
+                        conn, item.id, item.verdict, item.note, via=via, answer_ref=item.answer_ref
+                    )
+                    key = None if decision is None else task_key(decision.task_id)
+                    items.append({"id": item.id, "result": result, "task_key": key})
+            return {"items": items}
 
     return router
