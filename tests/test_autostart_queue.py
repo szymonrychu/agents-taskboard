@@ -209,6 +209,17 @@ async def test_weekly_at_pct_holds(pool, conn, fake, client, presets, preset):
     assert not created(fake)
 
 
+async def test_absent_five_hour_gates_on_weekly_only(pool, conn, fake, client, presets, preset):
+    # Ultra plan: Anthropic turned off the 5h window, so an absent five_hour is no limit.
+    _, a, _ = await queued(pool, "a", preset)
+    await configure(pool, "a", 2, 80)
+    await run(pool, client, presets, UsageReading(five_hour=None, seven_day=85.0))
+    assert row(conn, a)[3] == "usage_high"
+    assert not created(fake)
+    await run(pool, client, presets, UsageReading(five_hour=None, seven_day=34.0))
+    assert row(conn, a)[:2] == ("handled", "started")
+
+
 async def test_both_below_starts(pool, conn, fake, client, presets, preset):
     _, a, _ = await queued(pool, "a", preset)
     await configure(pool, "a", 2, 80)
