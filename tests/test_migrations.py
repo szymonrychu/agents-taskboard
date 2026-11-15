@@ -1,4 +1,5 @@
 import hashlib
+from datetime import UTC, datetime, timedelta
 from importlib import resources
 
 import psycopg
@@ -59,6 +60,7 @@ def test_applies_twice_idempotent(empty_db_url):
         "0005_plan_steps.sql",
         "0006_external_changes.sql",
         "0007_spec_autostart.sql",
+        "0008_approvals.sql",
     ]
     assert run_migrations(empty_db_url, PACKAGE) == []
     with psycopg.connect(empty_db_url) as conn:
@@ -239,6 +241,7 @@ def test_migration_backfills_default(empty_db_url):
         "0005_plan_steps.sql",
         "0006_external_changes.sql",
         "0007_spec_autostart.sql",
+        "0008_approvals.sql",
     ]
     with psycopg.connect(empty_db_url) as conn:
         assert conn.execute("SELECT project FROM tasks").fetchall() == [("default",)]
@@ -306,6 +309,7 @@ def test_legacy_withdrawn_row_survives_check(empty_db_url):
         "0005_plan_steps.sql",
         "0006_external_changes.sql",
         "0007_spec_autostart.sql",
+        "0008_approvals.sql",
     ]
     with psycopg.connect(empty_db_url) as conn:
         row = conn.execute(
@@ -645,3 +649,50 @@ def test_spec_autostart_migration_is_idempotent(conn):
     conn.execute(text)
     conn.execute(text)
     assert "preset_id" in columns(conn, "specs")
+
+
+def test_decision_kind_defaults_to_question_and_rejects_unknown(conn):
+    t = add_task(conn)
+    d = add_decision(conn, t)
+    assert (
+        conn.execute("SELECT kind FROM decisions WHERE id = %s", (d,)).fetchone()[0] == "question"
+    )
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_decision(conn, t, kind="poll")
+
+
+def test_approval_needs_expiry_and_may_expire(conn):
+    t = add_task(conn)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_decision(conn, t, kind="approval")
+    d = add_decision(conn, t, kind="approval", expires_at=datetime.now(UTC) + timedelta(hours=72))
+    conn.execute("UPDATE decisions SET status = 'expired' WHERE id = %s", (d,))
+    assert (
+        conn.execute("SELECT status FROM decisions WHERE id = %s", (d,)).fetchone()[0] == "expired"
+    )
+
+
+APPROVAL_NOTICE = (
+    "INSERT INTO notices (task_id, session_id, reason, status, decision_id)"
+    " VALUES (%s, 's1', 'approval', 'pending', %s)"
+)
+
+
+def test_approval_notices_one_pending_per_decision_not_per_task(conn):
+    t = add_task(conn)
+    exp = datetime.now(UTC) + timedelta(hours=1)
+    a = add_decision(conn, t, kind="approval", expires_at=exp)
+    b = add_decision(conn, t, kind="approval", expires_at=exp)
+    conn.execute(APPROVAL_NOTICE, (t, a))
+    conn.execute(APPROVAL_NOTICE, (t, b))  # a second approval on the same task is not folded
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(APPROVAL_NOTICE, (t, a))
+    add_notice(conn, t, reason="decision")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        add_notice(conn, t, reason="decision")  # question notices still fold
+
+
+def test_approval_notice_requires_decision_id(conn):
+    t = add_task(conn)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_notice(conn, t, reason="approval")
