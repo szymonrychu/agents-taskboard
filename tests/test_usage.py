@@ -204,7 +204,11 @@ async def test_concurrent_current_sends_one_request():
     [
         (None, 80, "usage_unknown"),
         (UsageReading(10, None), 80, "usage_unknown"),
-        (UsageReading(None, 10), 80, "usage_unknown"),
+        (UsageReading(None, None), 80, "usage_unknown"),
+        (UsageReading(None, 34), 80, "ok"),
+        (UsageReading(None, 79.9), 80, "ok"),
+        (UsageReading(None, 80), 80, "usage_high"),
+        (UsageReading(None, 95), 80, "usage_high"),
         (UsageReading(79.9, 10), 80, "ok"),
         (UsageReading(80, 10), 80, "usage_high"),
         (UsageReading(10, 95), 80, "usage_high"),

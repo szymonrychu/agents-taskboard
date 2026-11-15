@@ -47,7 +47,7 @@ Every process reads one validated `TASKBOARD_*` environment. A bad or missing va
 | `TASKBOARD_SERVICE_PORT` | `8001` | service listener port (the chart sets 8002) |
 | `TASKBOARD_NOTIFIER_POLL_SECONDS` | `5` | notifier poll interval and base retry delay |
 | `TASKBOARD_NOTIFIER_BACKOFF_MAX_SECONDS` | `60` | cap of the per-notice retry delay |
-| `TASKBOARD_USAGE_URL` | empty | absolute http(s) base of agents-usage (`GET /usage/v1/current`) for the autostart usage gate; empty means no source and every gate reads usage_unknown; needs `TASKBOARD_USAGE_TOKEN` |
+| `TASKBOARD_USAGE_URL` | empty | absolute http(s) base of agents-usage (`GET /usage/v1/current`) for the autostart usage gate; empty means no source and every gate reads usage_unknown; an absent five_hour window means no 5-hour limit (only seven_day gates), an absent seven_day reads usage_unknown; needs `TASKBOARD_USAGE_TOKEN` |
 | `TASKBOARD_USAGE_TOKEN` | empty | bearer token for agents-usage; required when the URL is set; the chart passes it to the notifier only |
 | `TASKBOARD_USAGE_CACHE_SECONDS` | `30` | how long a usage answer, or a failure, is cached |
 | `TASKBOARD_LOG_LEVEL` | `INFO` | log level |

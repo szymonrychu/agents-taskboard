@@ -69,11 +69,14 @@ def _utc(moment: datetime) -> datetime:
 def usage_gate(
     reading: UsageReading | None, max_usage_pct: int
 ) -> Literal["ok", "usage_high", "usage_unknown"]:
-    """unknown when there is no reading or either metric is missing; high when either metric is
-    at or above the project's ceiling; else ok."""
-    if reading is None or reading.five_hour is None or reading.seven_day is None:
+    """unknown when there is no reading or the weekly metric is missing; high when a present
+    metric is at or above the project's ceiling; else ok. An absent five_hour is no 5-hour limit
+    (the ultra plan has no such window), so only seven_day gates then."""
+    if reading is None or reading.seven_day is None:
         return "usage_unknown"
-    if reading.five_hour >= max_usage_pct or reading.seven_day >= max_usage_pct:
+    if reading.seven_day >= max_usage_pct:
+        return "usage_high"
+    if reading.five_hour is not None and reading.five_hour >= max_usage_pct:
         return "usage_high"
     return "ok"
 
