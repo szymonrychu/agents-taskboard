@@ -323,16 +323,32 @@ USAGE_TOKEN = "".join(["usage", "-", "fixture", "-", "value"])
 def test_notifier_gets_usage_env():
     docs = render({"usage": {"url": "http://usage.agents.svc", "token": USAGE_TOKEN}})
     cm = of_kind(docs, "ConfigMap")[0]["data"]
-    assert cm["TASKBOARD_USAGE_URL"] == "http://usage.agents.svc"
     assert USAGE_TOKEN not in str(cm)
     deps = deployments(docs)
     env = env_of(deps["notifier"]["spec"]["template"]["spec"]["containers"][0])
+    assert env["TASKBOARD_USAGE_URL"]["value"] == "http://usage.agents.svc"
     ref = env["TASKBOARD_USAGE_TOKEN"]["valueFrom"]["secretKeyRef"]
     assert ref["key"] == "usage-token"
     assert ref["name"] in {s["metadata"]["name"] for s in of_kind(docs, "Secret")}
     for name in ("web", "service"):
         other = env_of(deps[name]["spec"]["template"]["spec"]["containers"][0])
         assert "TASKBOARD_USAGE_TOKEN" not in other
+
+
+def test_every_container_with_usage_url_has_usage_token():
+    docs = render({"usage": {"url": "http://usage.agents.svc", "token": USAGE_TOKEN}})
+    cm = of_kind(docs, "ConfigMap")[0]["data"]
+    seen = 0
+    for dep in deployments(docs).values():
+        pod = dep["spec"]["template"]["spec"]
+        for c in pod.get("initContainers", []) + pod["containers"]:
+            env = env_of(c)
+            from_cm = any("configMapRef" in e for e in c.get("envFrom", []))
+            has_url = "TASKBOARD_USAGE_URL" in env or (from_cm and "TASKBOARD_USAGE_URL" in cm)
+            if has_url:
+                seen += 1
+                assert "TASKBOARD_USAGE_TOKEN" in env, c["name"]
+    assert seen >= 1
 
 
 def test_usage_existing_secret_referenced():

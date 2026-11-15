@@ -133,9 +133,6 @@ TASKBOARD_ALLOWED_CIDRS: {{ join "," .Values.allowedCidrs | quote }}
 {{- if include "agents-taskboard.delegateEnabled" . }}
 TASKBOARD_DELEGATE_PORT: {{ .Values.components.delegate.port | int | toString | quote }}
 {{- end }}
-{{- if include "agents-taskboard.usageEnabled" . }}
-TASKBOARD_USAGE_URL: {{ .Values.usage.url | quote }}
-{{- end }}
 {{- range $k, $v := .Values.env }}
 {{- if not (hasPrefix "TASKBOARD_" $k) }}
 {{- fail (printf "agents-taskboard: env key %q must start with TASKBOARD_" $k) }}
@@ -180,6 +177,8 @@ env:
         {{- include "agents-taskboard.delegateRef" . | nindent 8 }}
   {{- end }}
   {{- if and (eq $component "notifier") (include "agents-taskboard.usageEnabled" .) }}
+  - name: TASKBOARD_USAGE_URL
+    value: {{ .Values.usage.url | quote }}
   - name: TASKBOARD_USAGE_TOKEN
     valueFrom:
       secretKeyRef:
