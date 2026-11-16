@@ -74,13 +74,14 @@ class Notice:
     spec_id: int | None
     session_id: str
     reason: str
+    decision_id: int | None
 
 
 async def claim_notice(conn: psycopg.AsyncConnection) -> Notice | None:
     """Lock the oldest due pending notice no other notifier holds. The caller keeps the
     transaction open across the send and `mark_sent`, so a second notifier skips the row."""
     cur = await conn.execute(
-        "SELECT id, task_id, spec_id, session_id, reason FROM notices"
+        "SELECT id, task_id, spec_id, session_id, reason, decision_id FROM notices"
         " WHERE status = 'pending' AND next_attempt_at <= now()"
         " ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED"
     )

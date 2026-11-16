@@ -7,8 +7,15 @@ from agents_common.fake_orchestrator import FakeOrchestrator
 from agents_common.orchestrator import OrchestratorClient
 from test_api_tasks import TASKS, agent, create
 
+from agents_taskboard.db.decisions import expire_approvals
 from agents_taskboard.db.notices import claim_notice
-from agents_taskboard.notifier import notice_text, run_notifier, send_next, spec_notice_text
+from agents_taskboard.notifier import (
+    approval_notice_text,
+    notice_text,
+    run_notifier,
+    send_next,
+    spec_notice_text,
+)
 from agents_taskboard.settings import Settings
 
 PUBLIC = "https://tasks.example.test"
@@ -321,3 +328,87 @@ async def test_spec_notice_is_sent_with_spec_text(
     (msg,) = fake.messages.values()
     assert msg["session_id"] == sid
     assert msg["text"] == f"Spec {key} was updated: {PUBLIC}/specs/{key}"
+
+
+def test_approval_notice_text_templates():
+    url = f"{PUBLIC}/tasks/T-88"
+    go = {"choice": 0, "label": "Go"}
+    assert approval_notice_text(412, "T-88", "answered", go, "ship it", PUBLIC) == (
+        f"Approval D-412 (T-88) GO by the user: ship it - {url}"
+    )
+    no_go = {"choice": 1, "label": "No-go"}
+    assert approval_notice_text(412, "T-88", "answered", no_go, None, PUBLIC) == (
+        f"Approval D-412 (T-88) NO-GO by the user - {url}"
+    )
+    assert approval_notice_text(412, "T-88", "expired", None, None, PUBLIC) == (
+        f"Approval D-412 (T-88) EXPIRED - {url}"
+    )
+    spaced = approval_notice_text(1, "T-1", "answered", go, "a\nb   c", PUBLIC)
+    assert "by the user: a b c - " in spaced
+    assert "x" * 300 + "... - " in approval_notice_text(1, "T-1", "answered", go, "x" * 400, PUBLIC)
+
+
+async def test_approval_notices_carry_verdict(
+    service_client, web_client, fast, pool, conn, fake, client
+):
+    sid = add_session(fake)
+    key = (await create(service_client, headers=agent(sid)))["key"]
+    ids = [
+        (
+            await service_client.post(
+                f"{TASKS}/{key}/approvals", json={"title": f"t{i}"}, headers=agent(sid)
+            )
+        ).json()["id"]
+        for i in range(2)
+    ]
+    await web_client.post(
+        f"{TASKS}/{key}/decisions/{ids[0]}/answer", json={"choice": 0, "note": "ok"}
+    )
+    await web_client.post(f"{TASKS}/{key}/decisions/{ids[1]}/answer", json={"choice": 1})
+    await run_until(fast, pool, client, lambda: statuses(conn) == ["sent", "sent"])
+    texts = sorted(m["text"] for m in fake.messages.values())
+    url = f"{PUBLIC}/tasks/{key}"
+    assert texts == sorted(
+        [
+            f"Approval D-{ids[0]} ({key}) GO by the user: ok - {url}",
+            f"Approval D-{ids[1]} ({key}) NO-GO by the user - {url}",
+        ]
+    )
+
+
+async def test_sweep_expires_due_approvals_and_notifies(service_client, pool, conn):
+    key = (await create(service_client))["key"]
+    did = (
+        await service_client.post(f"{TASKS}/{key}/approvals", json={"title": "t"}, headers=agent())
+    ).json()["id"]
+    conn.execute(
+        "UPDATE decisions SET expires_at = now() - interval '1 second' WHERE id = %s", (did,)
+    )
+    async with pool.connection() as c:
+        assert await expire_approvals(c) == 1
+        assert await expire_approvals(c) == 0
+    assert conn.execute("SELECT status FROM decisions WHERE id = %s", (did,)).fetchone()[0] == (
+        "expired"
+    )
+    assert (
+        conn.execute("SELECT count(*) FROM events WHERE kind = 'decision_expired'").fetchone()[0]
+        == 1
+    )
+    assert conn.execute("SELECT reason, decision_id FROM notices").fetchall() == [("approval", did)]
+
+
+async def test_notifier_loop_expires_and_sends(service_client, fast, pool, conn, fake, client):
+    sid = add_session(fake)
+    key = (await create(service_client, headers=agent(sid)))["key"]
+    did = (
+        await service_client.post(
+            f"{TASKS}/{key}/approvals", json={"title": "t"}, headers=agent(sid)
+        )
+    ).json()["id"]
+    conn.execute(
+        "UPDATE decisions SET expires_at = now() - interval '1 second' WHERE id = %s", (did,)
+    )
+    await run_until(fast, pool, client, lambda: statuses(conn) == ["sent"])
+    assert [m["text"] for m in fake.messages.values()] == [
+        f"Approval D-{did} ({key}) EXPIRED - {PUBLIC}/tasks/{key}"
+    ]

@@ -29,6 +29,7 @@ _COLUMNS = (
     " d.kind, d.subject, d.expires_at, d.answered_via, d.answer_ref"
 )
 DEFAULT_APPROVAL_TTL_SECONDS = 259200
+EXPIRE_BATCH = 100
 APPROVAL_OPTIONS: list[dict[str, Any]] = [
     {"label": "Go", "description": None, "recommended": True},
     {"label": "No-go", "description": None, "recommended": False},
@@ -248,6 +249,41 @@ async def unanswerable_reason(
     if status == "withdrawn":
         return "withdrawn"
     return "already_answered"
+
+
+async def expire_approvals(conn: psycopg.AsyncConnection, limit: int = EXPIRE_BATCH) -> int:
+    """Flip up to `limit` open approvals past their `expires_at` to expired, in one transaction;
+    each gets a `decision_expired` event, an approval notice for the asking session and a NOTIFY.
+    Rows an answer holds locked are skipped (the answer wins or loses on its own guard). Returns
+    the number expired."""
+    async with conn.transaction():
+        cur = await conn.execute(
+            "UPDATE decisions SET status = 'expired' WHERE id IN (SELECT id FROM decisions"
+            " WHERE kind = 'approval' AND status = 'open' AND expires_at <= now() ORDER BY id"
+            " LIMIT %s FOR UPDATE SKIP LOCKED) AND status = 'open'"
+            " RETURNING id, task_id, asking_session",
+            (limit,),
+        )
+        rows = await cur.fetchall()
+        for decision_id, task_id, asking_session in rows:
+            await touch_task(conn, USER, task_id)
+            await append_event(
+                conn, task_id, USER, "decision_expired", {"decision_id": decision_id}
+            )
+            await enqueue_approval_notice(conn, task_id, asking_session, decision_id)
+            await notify_changed(conn, task_id)
+        return len(rows)
+
+
+async def approval_outcome(
+    conn: psycopg.AsyncConnection, decision_id: int
+) -> tuple[int, str, Any, str | None] | None:
+    """(task_id, status, answer, note) of the decision; None when it is gone."""
+    cur = await conn.execute(
+        "SELECT task_id, status, answer, note FROM decisions WHERE id = %s", (decision_id,)
+    )
+    row = await cur.fetchone()
+    return None if row is None else (row[0], row[1], row[2], row[3])
 
 
 async def answer_approval(

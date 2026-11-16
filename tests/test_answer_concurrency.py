@@ -80,3 +80,60 @@ async def test_two_batch_answers_one_wins(service_client, web_client, conn):
     )
     assert sorted(r.json()["items"][0]["result"] for r in rs) == ["already_answered", "answered"]
     assert conn.execute("SELECT count(*) FROM notices").fetchone()[0] == 1
+
+
+async def _approval_row(db_url, did) -> tuple[str, int]:
+    async with await psycopg.AsyncConnection.connect(db_url) as c:
+        status = await (
+            await c.execute("SELECT status FROM decisions WHERE id = %s", (did,))
+        ).fetchone()
+        n = await (
+            await c.execute(
+                "SELECT count(*) FROM notices WHERE reason = 'approval' AND decision_id = %s",
+                (did,),
+            )
+        ).fetchone()
+    return status[0], n[0]
+
+
+async def test_sweep_and_answer_race_sweep_first(service_client, db_url):
+    """The sweep holds the row lock; the answer's expiry guard already excludes the due row, so
+    it does not wait on the lock and loses as expired; the sweep's single notice stands."""
+    key = (await create(service_client))["key"]
+    did = (await ask_approval(service_client, key)).json()["id"]
+    async with (
+        await psycopg.AsyncConnection.connect(db_url, autocommit=True) as a,
+        await psycopg.AsyncConnection.connect(db_url, autocommit=True) as b,
+    ):
+        await a.execute(
+            "UPDATE decisions SET expires_at = now() - interval '1 second' WHERE id = %s", (did,)
+        )
+        async with a.transaction():
+            assert await repo.expire_approvals(a) == 1
+            answer = repo.answer_approval(b, did, "go", None, via="web", answer_ref=None)
+            result, _ = await asyncio.wait_for(answer, 5)
+            assert result == "expired"
+        late, decision = await repo.answer_approval(b, did, "go", None, via="web", answer_ref=None)
+        assert late == "expired" and decision is not None and decision.status == "expired"
+    assert await _approval_row(db_url, did) == ("expired", 1)
+
+
+async def test_sweep_and_answer_race_answer_first(service_client, db_url):
+    """The answer holds the row lock; the sweep skips it, and once committed it is not open."""
+    key = (await create(service_client))["key"]
+    did = (await ask_approval(service_client, key)).json()["id"]
+    async with (
+        await psycopg.AsyncConnection.connect(db_url, autocommit=True) as a,
+        await psycopg.AsyncConnection.connect(db_url, autocommit=True) as b,
+    ):
+        await a.execute(
+            "UPDATE decisions SET expires_at = now() + interval '0.5 second' WHERE id = %s",
+            (did,),
+        )
+        async with a.transaction():
+            result, _ = await repo.answer_approval(a, did, "go", None, via="web", answer_ref=None)
+            assert result == "answered"
+            await asyncio.sleep(0.6)
+            assert await repo.expire_approvals(b) == 0  # SKIP LOCKED
+        assert await repo.expire_approvals(b) == 0
+    assert await _approval_row(db_url, did) == ("answered", 1)
