@@ -1,6 +1,7 @@
 import asyncio
 
 import psycopg
+import pytest
 from psycopg_pool import AsyncConnectionPool
 from test_api_tasks import TASKS, create
 from test_approvals import ask_approval
@@ -137,3 +138,65 @@ async def test_sweep_and_answer_race_answer_first(service_client, db_url):
             assert await repo.expire_approvals(b) == 0  # SKIP LOCKED
         assert await repo.expire_approvals(b) == 0
     assert await _approval_row(db_url, did) == ("answered", 1)
+
+
+async def test_batch_failure_mid_way_keeps_earlier_items(
+    service_client, web_client, conn, monkeypatch
+):
+    """Each item commits on its own: a DB error on a later item leaves earlier ones answered."""
+    key = (await create(service_client))["key"]
+    a1, a2 = [
+        (await ask_approval(service_client, key, client_key=f"k{i}")).json()["id"] for i in range(2)
+    ]
+    real = repo.answer_approval
+
+    async def failing(conn, decision_id, *args, **kwargs):
+        if decision_id == a2:
+            raise psycopg.errors.QueryCanceled("boom")
+        return await real(conn, decision_id, *args, **kwargs)
+
+    monkeypatch.setattr(repo, "answer_approval", failing)
+    with pytest.raises(psycopg.errors.QueryCanceled):
+        await web_client.post(
+            f"{PREFIX}/approvals/answer",
+            json={"items": [{"id": a2, "verdict": "go"}, {"id": a1, "verdict": "go"}]},
+        )
+    rows = conn.execute("SELECT id, status FROM decisions ORDER BY id").fetchall()
+    assert rows == [(a1, "answered"), (a2, "open")]
+
+
+async def test_overlapping_batches_in_opposite_order_both_complete(
+    service_client, web_client, conn, monkeypatch
+):
+    """Items run sorted by id and commit one by one, so two batches naming the same approvals in
+    opposite order cannot deadlock."""
+    key = (await create(service_client))["key"]
+    a1, a2 = [
+        (await ask_approval(service_client, key, client_key=f"k{i}")).json()["id"] for i in range(2)
+    ]
+    real = repo.answer_approval
+
+    async def slow(*args, **kwargs):
+        result = await real(*args, **kwargs)
+        await asyncio.sleep(0.3)  # interleave the two batches
+        return result
+
+    monkeypatch.setattr(repo, "answer_approval", slow)
+    url = f"{PREFIX}/approvals/answer"
+    rs = await asyncio.wait_for(
+        asyncio.gather(
+            web_client.post(
+                url, json={"items": [{"id": a1, "verdict": "go"}, {"id": a2, "verdict": "go"}]}
+            ),
+            web_client.post(
+                url,
+                json={"items": [{"id": a2, "verdict": "no_go"}, {"id": a1, "verdict": "no_go"}]},
+            ),
+        ),
+        15,
+    )
+    assert [r.status_code for r in rs] == [200, 200]
+    for did in (a1, a2):
+        results = sorted(i["result"] for r in rs for i in r.json()["items"] if i["id"] == did)
+        assert results == ["already_answered", "answered"]
+    assert [i["id"] for i in rs[1].json()["items"]] == [a2, a1]  # response keeps request order

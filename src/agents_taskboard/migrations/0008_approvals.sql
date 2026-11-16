@@ -8,6 +8,11 @@
 --
 -- decisions_open_approval_expiry_idx serves the expiry sweep of the notifier. Every statement is
 -- idempotent; the new CHECKs hold for existing rows (no approval rows exist yet).
+--
+-- lock_timeout: fail fast rather than queue behind a notifier row lock held across an HTTP send
+-- (LOCAL: the migrator runs this file in its own transaction).
+
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'question';
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS subject text;

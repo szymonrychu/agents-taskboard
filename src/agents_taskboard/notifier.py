@@ -273,8 +273,12 @@ async def run_notifier(
     try:
         while not stop.is_set():
             wake.clear()
-            async with pool.connection() as conn:
-                expired = await expire_approvals(conn)
+            try:
+                async with pool.connection() as conn:
+                    expired = await expire_approvals(conn)
+            except psycopg.Error as exc:  # e.g. a deadlock victim: retry on the next pass
+                expired = 0
+                log.warning("approval expiry sweep failed, retrying next pass: %s", exc)
             scanned = None
             if loop.time() >= scan_resume:
                 try:

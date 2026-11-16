@@ -90,14 +90,17 @@ def build_approval_router(
                 via = f"delegate:{body.source}"
             else:
                 via = actor.via or "web"
-            items = []
-            async with pool_of(request).connection() as conn:
-                for item in body.items:
+            # One connection and one committed transaction per item, in id order: no item's
+            # failure undoes another, and overlapping batches take row locks in the same order.
+            pool = pool_of(request)
+            results: dict[int, dict[str, Any]] = {}
+            for item in sorted(body.items, key=lambda i: i.id):
+                async with pool.connection() as conn:
                     result, decision = await repo.answer_approval(
                         conn, item.id, item.verdict, item.note, via=via, answer_ref=item.answer_ref
                     )
-                    key = None if decision is None else task_key(decision.task_id)
-                    items.append({"id": item.id, "result": result, "task_key": key})
-            return {"items": items}
+                key = None if decision is None else task_key(decision.task_id)
+                results[item.id] = {"id": item.id, "result": result, "task_key": key}
+            return {"items": [results[item.id] for item in body.items]}
 
     return router

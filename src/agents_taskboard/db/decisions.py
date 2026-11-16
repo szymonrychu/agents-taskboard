@@ -268,7 +268,7 @@ async def expire_approvals(conn: psycopg.AsyncConnection, limit: int = EXPIRE_BA
         for decision_id, task_id, asking_session in rows:
             await touch_task(conn, USER, task_id)
             await append_event(
-                conn, task_id, USER, "decision_expired", {"decision_id": decision_id}
+                conn, task_id, USER, "decision_expired", {"decision_id": decision_id, "by": "sweep"}
             )
             await enqueue_approval_notice(conn, task_id, asking_session, decision_id)
             await notify_changed(conn, task_id)
@@ -296,16 +296,21 @@ async def answer_approval(
     answer_ref: str | None,
 ) -> tuple[ApprovalResult, Decision | None]:
     """Answer an approval Go or No-go. `not_found` (no decision) when it is absent or not an
-    approval; otherwise the decision as it stands after the attempt."""
-    current = await get_decision(conn, USER, decision_id)
-    if current is None or current.kind != "approval":
-        return "not_found", None
-    choice = VERDICT_CHOICE[verdict]
-    given = {"choice": choice, "label": APPROVAL_OPTIONS[choice]["label"]}
-    decision = await answer_decision(conn, decision_id, given, note, via=via, answer_ref=answer_ref)
-    if decision is not None:
-        return "answered", decision
-    return await unanswerable_reason(conn, decision_id), await get_decision(conn, USER, decision_id)
+    approval; otherwise the decision as it stands after the attempt. The read and the answer share
+    one transaction, which commits here when `conn` is idle (the batch route's per-item unit)."""
+    async with conn.transaction():
+        current = await get_decision(conn, USER, decision_id)
+        if current is None or current.kind != "approval":
+            return "not_found", None
+        choice = VERDICT_CHOICE[verdict]
+        given = {"choice": choice, "label": APPROVAL_OPTIONS[choice]["label"]}
+        decision = await answer_decision(
+            conn, decision_id, given, note, via=via, answer_ref=answer_ref
+        )
+        if decision is not None:
+            return "answered", decision
+        reason = await unanswerable_reason(conn, decision_id)
+        return reason, await get_decision(conn, USER, decision_id)
 
 
 async def list_approvals(

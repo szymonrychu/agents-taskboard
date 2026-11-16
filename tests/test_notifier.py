@@ -390,10 +390,9 @@ async def test_sweep_expires_due_approvals_and_notifies(service_client, pool, co
     assert conn.execute("SELECT status FROM decisions WHERE id = %s", (did,)).fetchone()[0] == (
         "expired"
     )
-    assert (
-        conn.execute("SELECT count(*) FROM events WHERE kind = 'decision_expired'").fetchone()[0]
-        == 1
-    )
+    assert conn.execute(
+        "SELECT actor_kind, detail FROM events WHERE kind = 'decision_expired'"
+    ).fetchall() == [("user", {"decision_id": did, "by": "sweep"})]
     assert conn.execute("SELECT reason, decision_id FROM notices").fetchall() == [("approval", did)]
 
 
@@ -412,3 +411,36 @@ async def test_notifier_loop_expires_and_sends(service_client, fast, pool, conn,
     assert [m["text"] for m in fake.messages.values()] == [
         f"Approval D-{did} ({key}) EXPIRED - {PUBLIC}/tasks/{key}"
     ]
+
+
+async def test_notifier_loop_survives_failed_expiry_sweep(
+    service_client, fast, pool, conn, fake, client, monkeypatch, caplog
+):
+    """A DB error in the expiry sweep is logged and the loop carries on (next pass expires)."""
+    import psycopg
+
+    from agents_taskboard import notifier
+
+    sid = add_session(fake)
+    key = (await create(service_client, headers=agent(sid)))["key"]
+    did = (
+        await service_client.post(
+            f"{TASKS}/{key}/approvals", json={"title": "t"}, headers=agent(sid)
+        )
+    ).json()["id"]
+    conn.execute(
+        "UPDATE decisions SET expires_at = now() - interval '1 second' WHERE id = %s", (did,)
+    )
+    calls = 0
+
+    async def flaky(c):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise psycopg.errors.DeadlockDetected("deadlock detected")
+        return await expire_approvals(c)
+
+    monkeypatch.setattr(notifier, "expire_approvals", flaky)
+    await run_until(fast, pool, client, lambda: statuses(conn) == ["sent"])
+    assert calls >= 2
+    assert "expiry sweep failed" in caplog.text
