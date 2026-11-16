@@ -190,8 +190,11 @@ async def send_next(
         if notice is None:
             return None
         if notice.reason == "approval":
-            assert notice.decision_id is not None
-            outcome = await approval_outcome(conn, notice.decision_id)
+            outcome = (
+                await approval_outcome(conn, notice.decision_id)
+                if notice.decision_id is not None
+                else None
+            )
             if outcome is None:
                 await mark_sent(conn, notice.id)
                 return True

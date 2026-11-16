@@ -127,13 +127,13 @@ async def test_sweep_and_answer_race_answer_first(service_client, db_url):
         await psycopg.AsyncConnection.connect(db_url, autocommit=True) as b,
     ):
         await a.execute(
-            "UPDATE decisions SET expires_at = now() + interval '0.5 second' WHERE id = %s",
+            "UPDATE decisions SET expires_at = now() + interval '2 second' WHERE id = %s",
             (did,),
         )
         async with a.transaction():
             result, _ = await repo.answer_approval(a, did, "go", None, via="web", answer_ref=None)
             assert result == "answered"
-            await asyncio.sleep(0.6)
+            await asyncio.sleep(2.3)
             assert await repo.expire_approvals(b) == 0  # SKIP LOCKED
         assert await repo.expire_approvals(b) == 0
     assert await _approval_row(db_url, did) == ("answered", 1)
