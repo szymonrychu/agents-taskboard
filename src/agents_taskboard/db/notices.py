@@ -20,6 +20,19 @@ async def enqueue_decision_notice(
     )
 
 
+async def enqueue_approval_notice(
+    conn: psycopg.AsyncConnection, task_id: int, session_id: str, decision_id: int
+) -> None:
+    """Queue a regular-lane notice that an approval was answered. Unlike a question notice it is
+    one per approval (two approvals on a task each reach the session); a notice already pending
+    for the same approval absorbs this one."""
+    await conn.execute(
+        "INSERT INTO notices (task_id, session_id, reason, status, decision_id)"
+        " VALUES (%s, %s, 'approval', 'pending', %s) ON CONFLICT DO NOTHING",
+        (task_id, session_id, decision_id),
+    )
+
+
 async def enqueue_label_notice(
     conn: psycopg.AsyncConnection, task_id: int, session_id: str
 ) -> None:
@@ -61,13 +74,14 @@ class Notice:
     spec_id: int | None
     session_id: str
     reason: str
+    decision_id: int | None
 
 
 async def claim_notice(conn: psycopg.AsyncConnection) -> Notice | None:
     """Lock the oldest due pending notice no other notifier holds. The caller keeps the
     transaction open across the send and `mark_sent`, so a second notifier skips the row."""
     cur = await conn.execute(
-        "SELECT id, task_id, spec_id, session_id, reason FROM notices"
+        "SELECT id, task_id, spec_id, session_id, reason, decision_id FROM notices"
         " WHERE status = 'pending' AND next_attempt_at <= now()"
         " ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED"
     )

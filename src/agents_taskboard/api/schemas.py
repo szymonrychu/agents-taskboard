@@ -146,6 +146,32 @@ class DecisionAnswer(_Strict):
         return self
 
 
+class ApprovalCreate(_Strict):
+    title: str = Field(min_length=1, max_length=200)
+    context: str = Field(default="", max_length=8000)
+    subject: str | None = Field(default=None, min_length=1, max_length=2000)
+    expires_in_seconds: int | None = Field(default=None, ge=60)
+    client_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class ApprovalVerdict(_Strict):
+    id: int = Field(ge=1)
+    verdict: Literal["go", "no_go"]
+    note: str | None = Field(default=None, max_length=2000)
+    answer_ref: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class ApprovalAnswerBatch(_Strict):
+    items: list[ApprovalVerdict] = Field(min_length=1, max_length=50)
+    source: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{0,39}$")
+
+    @model_validator(mode="after")
+    def _distinct_ids(self) -> Self:
+        if len({i.id for i in self.items}) != len(self.items):
+            raise ValueError("items: ids must be distinct")
+        return self
+
+
 class DecisionWithdraw(_Strict):
     reason: str = Field(min_length=1, max_length=2000)
     superseded_by: int | None = Field(default=None, ge=1)

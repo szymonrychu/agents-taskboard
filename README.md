@@ -21,8 +21,8 @@ Run from this directory with mise:
 The `taskboard` entry point (`uv run taskboard <command>`):
 
 - `taskboard migrate` - apply the schema migrations to the service's own database and exit.
-- `taskboard serve-web` - serve the user-facing api on `TASKBOARD_HTTP_PORT` (source allowlist, answer route, SSE stream).
-- `taskboard serve-service` - serve the relay api on `TASKBOARD_SERVICE_PORT` (bearer token, agent identity from forwarded headers, no answer route, no stream).
+- `taskboard serve-web` - serve the user-facing api on `TASKBOARD_HTTP_PORT` (source allowlist, answer routes, SSE stream).
+- `taskboard serve-service` - serve the relay api on `TASKBOARD_SERVICE_PORT` (bearer token, agent identity from forwarded headers, no answer routes, no stream).
 - `taskboard serve-delegate` - serve the delegate listener on `TASKBOARD_DELEGATE_PORT` (cluster-only, bearer token list, acts as a user; exits 78 naming `TASKBOARD_DELEGATE_TOKENS` when the list is empty).
 - `taskboard notifier` - send pending notices to their sessions; one instance sends at a time (advisory lock).
 
@@ -50,12 +50,13 @@ Every process reads one validated `TASKBOARD_*` environment. A bad or missing va
 | `TASKBOARD_USAGE_URL` | empty | absolute http(s) base of agents-usage (`GET /usage/v1/current`) for the autostart usage gate; empty means no source and every gate reads usage_unknown; an absent five_hour window means no 5-hour limit (only seven_day gates), an absent seven_day reads usage_unknown; needs `TASKBOARD_USAGE_TOKEN` |
 | `TASKBOARD_USAGE_TOKEN` | empty | bearer token for agents-usage; required when the URL is set; the chart passes it to the notifier only |
 | `TASKBOARD_USAGE_CACHE_SECONDS` | `30` | how long a usage answer, or a failure, is cached |
+| `TASKBOARD_APPROVAL_MAX_TTL_SECONDS` | `604800` | largest `expires_in_seconds` an approval may ask (min 60); the default expiry of an approval is 72 hours, capped to this |
 | `TASKBOARD_LOG_LEVEL` | `INFO` | log level |
 | `TASKBOARD_SHUTDOWN_GRACE_SECONDS` | `20` | graceful shutdown wait |
 
 ## API
 
-Base path `/taskboard/api/v1`. JSON in and out. The web listener refuses any socket peer outside `TASKBOARD_ALLOWED_CIDRS` with `403 forbidden` (forwarding headers are never read); the service listener answers `401 unauthorized` unless `Authorization: Bearer <relay token>` matches and takes the acting agent from the `X-Orch-Session` (required, `400 actor_required`), `X-Orch-Slug` and `X-Orch-Projects` (required, `*` or a comma list of 1..10 distinct project slugs whose first is the home project, `400 actor_required` when missing or malformed) headers. `GET /healthz` and `GET /readyz` (`503 not_ready` when the database is unreachable) are outside the base path and exempt from both gates. The service listener serves every route below except the answer route and the stream. The delegate listener serves exactly the routes of the web listener (including the answer route and the stream) as the user actor, behind `Authorization: Bearer <delegate token>` (`401 unauthorized` otherwise; the relay token does not open it); it has no ingress path and no oauth2 admission, and ask and withdraw still refuse a user (`403 agent_required`). `agents-app-connector` is its client. Its error statuses follow `openapi.json` except `401` replaces `403 forbidden`. The machine-readable contract of the web listener is `openapi.json`, regenerated with `uv run python -m agents_taskboard.api.openapi > openapi.json`; a test fails when it drifts from the app or when a route is missing from this section.
+Base path `/taskboard/api/v1`. JSON in and out. The web listener refuses any socket peer outside `TASKBOARD_ALLOWED_CIDRS` with `403 forbidden` (forwarding headers are never read); the service listener answers `401 unauthorized` unless `Authorization: Bearer <relay token>` matches and takes the acting agent from the `X-Orch-Session` (required, `400 actor_required`), `X-Orch-Slug` and `X-Orch-Projects` (required, `*` or a comma list of 1..10 distinct project slugs whose first is the home project, `400 actor_required` when missing or malformed) headers. `GET /healthz` and `GET /readyz` (`503 not_ready` when the database is unreachable) are outside the base path and exempt from both gates. The service listener serves every route below except the answer routes and the stream. The delegate listener serves exactly the routes of the web listener (including the answer routes and the stream) as the user actor, behind `Authorization: Bearer <delegate token>` (`401 unauthorized` otherwise; the relay token does not open it); it has no ingress path and no oauth2 admission, and ask and withdraw still refuse a user (`403 agent_required`). `agents-app-connector` is its client. Its error statuses follow `openapi.json` except `401` replaces `403 forbidden`. The machine-readable contract of the web listener is `openapi.json`, regenerated with `uv run python -m agents_taskboard.api.openapi > openapi.json`; a test fails when it drifts from the app or when a route is missing from this section.
 
 External changes (delegate listener only; not on the web or service listeners): `POST /taskboard/api/v1/tasks/{key}/external-changes` with `{"source": "mindmap", "ref": "M-<n>", "actor_session": "<uuid>" | null}` (strict: `ref` matches `^M-[1-9][0-9]*$`, no other field) tells the taskboard that something linked to the task changed in another service. `202 {"status": "accepted"}`; `404 not_found` for an unknown task; `422 invalid_request` for a bad body. It takes a mindmap token (`TASKBOARD_MINDMAP_TOKENS`) only: a delegate token gets `403 forbidden_token`, no or a wrong token `401 unauthorized`, and a mindmap token is `401` on every other delegate path. It logs an `external_change` event (detail `source` and `ref` only); the notifier then queues one `linked` notice (text unchanged: task key and link) for the task's assignee session and every live session of the task's label audience (its labels in its project, plus superleaders), except `actor_session`. A `linked` notice already pending for the same task and session absorbs the next one.
 
@@ -97,7 +98,11 @@ Change one todo item (`text`, `status`). `404 not_found` for an unknown item.
 
 ### `POST /taskboard/api/v1/tasks/{key}/decisions`
 
-Ask a decision (agents only, `403 agent_required` for a user): `question`, `context`, `options` (2..8, each with `label`, `description`, `recommended`), `client_key`. `201`.
+Ask a decision (agents only, `403 agent_required` for a user): `question`, `context`, `options` (2..8, each with `label`, `description`, `recommended`), `client_key` (a key the session already used for an approval is `409 client_key_conflict`). `201`, `200` on a replay.
+
+### `POST /taskboard/api/v1/tasks/{key}/approvals`
+
+Ask a Go/No-go approval (agents only, `403 agent_required` for a user): `title` (the question, 1..200), `context`, `subject` (what is approved, 1..2000), `expires_in_seconds` (60..`TASKBOARD_APPROVAL_MAX_TTL_SECONDS`, default 72 hours capped to that; above the cap `422 invalid_request`), `client_key` (a replay by the same session on the task returns the existing approval; a key the session already used for a question decision is `409 client_key_conflict`). The options are fixed: `Go` (recommended) and `No-go`. `201`, `200` on a replay. The decision JSON of every decision carries `kind` (`question` or `approval`), `subject`, `expires_at`, `answered_via` and `answer_ref` (null for a question). `404 not_found` for an unknown task.
 
 ### `POST /taskboard/api/v1/tasks/{key}/decisions/{decision_id}/withdraw`
 
@@ -105,7 +110,15 @@ Withdraw an open decision (the asking session, or any superleader, i.e. an agent
 
 ### `POST /taskboard/api/v1/tasks/{key}/decisions/{decision_id}/answer`
 
-Answer an open decision as the user: `choice` (option index) or `text`, plus an optional `note`. Web listener only. `409 already_answered` when answered or withdrawn; of two simultaneous answers exactly one wins.
+Answer an open decision as the user: `choice` (option index) or `text`, plus an optional `note`. Web and delegate listeners only. An approval takes `choice` 0 (Go) or 1 (No-go) only; `text` is `422 invalid_request`. The decision records `answered_via` (`web` or `delegate`, the listener). `409 expired` when an approval has expired (or is still open past its `expires_at`), `409 already_answered` when answered or withdrawn; of two simultaneous answers exactly one wins. An answered approval queues one `approval` notice per approval for the asking session; a question keeps the per-task `decision` notice.
+
+### `GET /taskboard/api/v1/approvals`
+
+List approvals (never questions) in the caller's scope: query `status` (`open` default, `answered`, `withdrawn`, `expired`, `all`; else `422 invalid_request`), `session` (the asking session), `project`, `limit` (1..200, default 100). `open` lists only approvals not past `expires_at`. `200 {"items": [decision JSON + "task_title" + "project"]}`, soonest `expires_at` first, then id. An agent is always limited to the approvals its own session asked (a `session` it passes is ignored). Approvals never gate: they are not part of a spec gate's `decisions` or `open_decisions` and never block a spec approval.
+
+### `POST /taskboard/api/v1/approvals/answer`
+
+Answer up to 50 approvals at once as the user (web and delegate listeners only; the service listener has no such route): `{"items": [{"id", "verdict": "go" | "no_go", "note" (0..2000, optional), "answer_ref" (1..200, optional, e.g. the chat event that carried the answer)}], "source"}`; `items` is 1..50 with distinct ids, `source` is optional and matches `^[a-z][a-z0-9-]{0,39}$`, else `422 invalid_request`. Items run in id order, each in its own committed transaction (never all-or-nothing): an item that loses (already answered, expired, withdrawn) never blocks the others, and should a database error end the request with a 500, the items before it stay answered. `200 {"items": [{"id", "result", "task_key"}]}` in request order; `result` is `answered`, `already_answered`, `expired` (expired or open past `expires_at`), `withdrawn` or `not_found` (absent, or not an approval; `task_key` null). `answered_via` is `web` on the web listener and `delegate:<source>` on the delegate listener (`delegate` without `source`); `answer_ref` is stored as given.
 
 ### `GET /taskboard/api/v1/projects/summary`
 
@@ -127,7 +140,7 @@ One spec: its fields, `documents` (current `path`, `version`, `size`, `sha256`, 
 
 ### `PATCH /taskboard/api/v1/specs/{key}`
 
-Change `title`, `status`, `labels`, `project` (a move takes the spec's tasks along), `assignee_session` or `assignee_self`; `version` is required (`412 stale_version`). An agent that is not a superleader setting `approved` gets `409 decisions_open` with `decisions` (`[{task, id, question}]`, the open decisions on the spec's open or in_progress linked tasks, plan steps included) in the error object; the user and superleaders approve always, and re-sending `approved` on an approved spec changes nothing. Agents get `403 user_only` for assigning another session or clearing another session's assignment. An approval records the approved document versions in its event.
+Change `title`, `status`, `labels`, `project` (a move takes the spec's tasks along), `assignee_session` or `assignee_self`; `version` is required (`412 stale_version`). An agent that is not a superleader setting `approved` gets `409 decisions_open` with `decisions` (`[{task, id, question}]`, the open question decisions on the spec's open or in_progress linked tasks, plan steps included; open approvals never count) in the error object; the user and superleaders approve always, and re-sending `approved` on an approved spec changes nothing. Agents get `403 user_only` for assigning another session or clearing another session's assignment. An approval records the approved document versions in its event.
 
 ### `DELETE /taskboard/api/v1/specs/{key}`
 
@@ -205,7 +218,7 @@ The first ready step in order: `claim` (default false) also makes the caller its
 
 ### `GET /taskboard/api/v1/specs/{key}/gate`
 
-The spec's human gate: `{key, status, approved_versions, gate_task, decisions, gate, approved, approvable, open_decisions}`. The gate task is the improvement's own task linked to the spec: its lowest-id task that is not a step and not dropped (`null` when there is none). `decisions` are that task's decisions other than withdrawn ones (`[{id, question, status, answer}]`); `gate` is `none` with no such decision, `waiting` while one is open and `open` when all are answered. `approved` is `status == "approved"` and does not gate execution; `approved_versions` maps each document to the version the user approved (null unless approved). `approvable` is true when no decision on the spec's open or in_progress linked tasks is open; `open_decisions` lists those (`[{task, id, question}]`, task id then decision id), so an agent can approve exactly when `approvable` is true. The workbench rule gates implementation on an approved spec.
+The spec's human gate: `{key, status, approved_versions, gate_task, decisions, gate, approved, approvable, open_decisions}`. The gate task is the improvement's own task linked to the spec: its lowest-id task that is not a step and not dropped (`null` when there is none). `decisions` are that task's decisions other than withdrawn ones (`[{id, question, status, answer}]`); `gate` is `none` with no such decision, `waiting` while one is open and `open` when all are answered. `approved` is `status == "approved"` and does not gate execution; `approved_versions` maps each document to the version the user approved (null unless approved). `approvable` is true when no decision on the spec's open or in_progress linked tasks is open; `open_decisions` lists those (`[{task, id, question}]`, task id then decision id), so an agent can approve exactly when `approvable` is true. The workbench rule gates implementation on an approved spec. Only question decisions count in `decisions`, `gate`, `approvable` and `open_decisions`; an approval never gates.
 
 ### `GET /taskboard/api/v1/specs/queue`
 
@@ -233,7 +246,7 @@ Server-sent events (web and delegate listeners): `task_changed` with data `{"key
 
 ### Errors
 
-Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `superleader_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `not_open`, `name_taken`, `already_resolved`, `already_decided`, `step_in_progress`, `decisions_open` and `not_queued` (409), `stale_version` (412, on a document or the plan header with `current_version`, on the steps with `current_steps_version`), `payload_too_large` (413), `invalid_request`, `no_suggestion`, `dependency_cycle`, `project_mismatch`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
+Every error has the shape `{"error": {"code": "<code>", "message": "<text>"}}`. Codes: `actor_required` (400), `unauthorized` (401), `forbidden` (403), `agent_required` (403), `project_forbidden` (403), `user_only` (403), `superleader_only` (403), `not_found` (404), `method_not_allowed` (405), `already_answered`, `expired`, `client_key_conflict`, `not_open`, `name_taken`, `already_resolved`, `already_decided`, `step_in_progress`, `decisions_open` and `not_queued` (409), `stale_version` (412, on a document or the plan header with `current_version`, on the steps with `current_steps_version`), `payload_too_large` (413), `invalid_request`, `no_suggestion`, `dependency_cycle`, `project_mismatch`, `unknown_project` and `project_archived` (422), `not_ready` and `upstream_unavailable` (503).
 
 ## Spec autostart
 

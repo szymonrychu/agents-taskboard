@@ -1,4 +1,6 @@
-"""The notifier: sends each pending notice to its session as a content-free chat message.
+"""The notifier: sends each pending notice to its session as a content-free chat message, except
+an approval notice, which carries the verdict and the user's note. Each loop pass first expires
+due approvals.
 
 Delivery is at-least-once. The row lock (FOR UPDATE SKIP LOCKED) is held across the send and
 mark_sent in one transaction, so a second notifier skips the row; a crash between the send and
@@ -10,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from typing import Any
 
 import httpx
 import psycopg
@@ -24,6 +27,7 @@ from agents_common.runtime import advisory_singleton, run_service
 from psycopg_pool import AsyncConnectionPool
 
 from agents_taskboard.autostart import UsageSource, handle_new, run_queues
+from agents_taskboard.db.decisions import approval_outcome, expire_approvals
 from agents_taskboard.db.events import (
     CHANNEL,
     SPEC_CHANNEL,
@@ -48,6 +52,7 @@ from agents_taskboard.usage import UsageClient
 log = logging.getLogger(__name__)
 
 LOCK_NAME = "agents-taskboard-notifier"
+NOTE_CHARS = 300
 
 
 def notice_text(key: str, public_url: str) -> str:
@@ -58,6 +63,25 @@ def notice_text(key: str, public_url: str) -> str:
 def spec_notice_text(key: str, public_url: str) -> str:
     """The whole message about a spec: its key and a link, never any spec content."""
     return f"Spec {key} was updated: {public_url.rstrip('/')}/specs/{key}"
+
+
+def approval_notice_text(
+    decision_id: int, key: str, status: str, answer: Any, note: str | None, public_url: str
+) -> str:
+    """An approval's outcome: GO or NO-GO by the user with the user's note (whitespace collapsed,
+    cut to NOTE_CHARS), or EXPIRED, and a link to the task."""
+    url = task_url(public_url.rstrip("/"), key)
+    head = f"Approval D-{decision_id} ({key})"
+    if status == "expired":
+        return f"{head} EXPIRED - {url}"
+    verdict = "GO" if answer["choice"] == 0 else "NO-GO"
+    text = f"{head} {verdict} by the user"
+    if note:
+        note = " ".join(note.split())
+        if len(note) > NOTE_CHARS:
+            note = note[:NOTE_CHARS] + "..."
+        text += f": {note}"
+    return f"{text} - {url}"
 
 
 class SessionLookup:
@@ -165,7 +189,20 @@ async def send_next(
         notice = await claim_notice(conn)
         if notice is None:
             return None
-        if notice.spec_id is not None:
+        if notice.reason == "approval":
+            outcome = (
+                await approval_outcome(conn, notice.decision_id)
+                if notice.decision_id is not None
+                else None
+            )
+            if outcome is None:
+                await mark_sent(conn, notice.id)
+                return True
+            task_id, status, answer, note = outcome
+            text = approval_notice_text(
+                notice.decision_id, task_key(task_id), status, answer, note, public_url
+            )
+        elif notice.spec_id is not None:
             text = spec_notice_text(spec_key(notice.spec_id), public_url)
         else:
             assert notice.task_id is not None
@@ -210,12 +247,13 @@ async def run_notifier(
     usage: UsageSource | None = None,
     presets: PresetLookup | None = None,
 ) -> None:
-    """Scan label events, then drain due notices, then handle new spec starts, then run the
-    spec start queues (`usage` None: the gate reads usage_unknown and nothing starts; `presets`
-    defaults to a lookup over `client`), then wait for NOTIFY task_changed, spec_changed or
-    spec_start or the poll interval. A failed send only reschedules its own row (exponential,
-    capped), so it never stalls other notices; a failed label lookup leaves its event unscanned
-    and pauses only the scanning (same backoff), never the sending. Runs until `stop` is set."""
+    """Expire due approvals, then scan label events, then drain due notices, then handle new spec
+    starts, then run the spec start queues (`usage` None: the gate reads usage_unknown and nothing
+    starts; `presets` defaults to a lookup over `client`), then wait for NOTIFY task_changed,
+    spec_changed or spec_start or the poll interval. A failed send only reschedules its own row
+    (exponential, capped), so it never stalls other notices; a failed label lookup leaves its event
+    unscanned and pauses only the scanning (same backoff), never the sending. Runs until `stop` is
+    set."""
     own = lookup is None
     if presets is None:
         presets = PresetLookup(client)
@@ -235,6 +273,12 @@ async def run_notifier(
     try:
         while not stop.is_set():
             wake.clear()
+            try:
+                async with pool.connection() as conn:
+                    expired = await expire_approvals(conn)
+            except psycopg.Error as exc:  # e.g. a deadlock victim: retry on the next pass
+                expired = 0
+                log.warning("approval expiry sweep failed, retrying next pass: %s", exc)
             scanned = None
             if loop.time() >= scan_resume:
                 try:
@@ -275,7 +319,8 @@ async def run_notifier(
                 settings.notifier_poll_seconds,
                 settings.notifier_backoff_max_seconds,
             )
-            if result is None and scanned is None and started is None and not queued:
+            idle = result is None and scanned is None and started is None
+            if idle and not queued and not expired:
                 wait = settings.notifier_poll_seconds
                 if scan_resume > loop.time():
                     wait = min(wait, scan_resume - loop.time())

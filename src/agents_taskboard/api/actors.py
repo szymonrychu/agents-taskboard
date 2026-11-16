@@ -33,6 +33,7 @@ class Actor:
     slug: str | None = None
     projects: frozenset[str] | None = None  # None: every project
     home_project: str | None = None  # first of the header list; None: every project
+    via: str | None = None  # the listener a user acts through: "web" or "delegate"; None: agent
 
     def may_use(self, project: str) -> bool:
         return self.projects is None or project in self.projects
@@ -49,7 +50,11 @@ class Actor:
 
 
 def actor_from_web() -> Actor:
-    return Actor(kind="user")
+    return Actor(kind="user", via="web")
+
+
+def actor_from_delegate() -> Actor:
+    return Actor(kind="user", via="delegate")
 
 
 def actor_from_service(request: Request) -> Actor:

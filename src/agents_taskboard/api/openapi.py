@@ -1,7 +1,7 @@
 """Deterministic OpenAPI export of the web app: `python -m agents_taskboard.api.openapi`.
 
 Redirect stdout to `openapi.json`.
-The web app is the user-facing contract (it includes the answer route; the service app is the
+The web app is the user-facing contract (it includes the answer routes; the service app is the
 relay's subset and has none; the delegate app serves the same routes as the web app, with 401
 instead of 403 as its gate error). FastAPI documents a validation error as its own
 `HTTPValidationError`; this service answers every error with `{"error": {"code", "message"}}`
@@ -40,7 +40,7 @@ ERROR_SCHEMAS: dict[str, Any] = {
 ERRORS = {
     403: "source address is not allowed (forbidden)",
     404: "no such task, decision or todo item (not_found)",
-    409: "the decision is not open (already_answered, not_open)",
+    409: "the decision is not open (already_answered, expired, not_open, client_key_conflict)",
     412: "the task changed since it was read (stale_version)",
     413: "over a size cap (payload_too_large)",
     422: "invalid request (invalid_request)",
@@ -78,7 +78,10 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("post", "/tasks/{key}/comments"): (403, 404, 422),
     ("put", "/tasks/{key}/todo"): (403, 404, 422),
     ("patch", "/tasks/{key}/todo/{item_id}"): (403, 404, 422),
-    ("post", "/tasks/{key}/decisions"): (403, 404, 422),
+    ("post", "/tasks/{key}/decisions"): (403, 404, 409, 422),
+    ("post", "/tasks/{key}/approvals"): (403, 404, 409, 422),
+    ("get", "/approvals"): (403, 422),
+    ("post", "/approvals/answer"): (403, 422),
     ("post", "/tasks/{key}/decisions/{decision_id}/withdraw"): (403, 404, 409, 422),
     ("post", "/tasks/{key}/decisions/{decision_id}/answer"): (403, 404, 409, 422),
     ("get", "/specs"): (403, 422),

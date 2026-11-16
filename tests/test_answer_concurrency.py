@@ -1,10 +1,13 @@
 import asyncio
 
 import psycopg
+import pytest
 from psycopg_pool import AsyncConnectionPool
-from test_api_tasks import TASKS
+from test_api_tasks import TASKS, create
+from test_approvals import ask_approval
 from test_decisions import WITHDRAW, dec_url, make
 
+from agents_taskboard.api.app import PREFIX
 from agents_taskboard.db import decisions as repo
 
 
@@ -66,3 +69,134 @@ async def test_answer_races_withdraw(service_client, web_client, pool: AsyncConn
         n = await (await c.execute("SELECT count(*) FROM notices")).fetchone()
     answered = task["decisions"][0]["status"] == "answered"
     assert n[0] == (1 if answered else 0)
+
+
+async def test_two_batch_answers_one_wins(service_client, web_client, conn):
+    key = (await create(service_client))["key"]
+    did = (await ask_approval(service_client, key)).json()["id"]
+    url = f"{PREFIX}/approvals/answer"
+    rs = await asyncio.gather(
+        web_client.post(url, json={"items": [{"id": did, "verdict": "go"}]}),
+        web_client.post(url, json={"items": [{"id": did, "verdict": "no_go"}]}),
+    )
+    assert sorted(r.json()["items"][0]["result"] for r in rs) == ["already_answered", "answered"]
+    assert conn.execute("SELECT count(*) FROM notices").fetchone()[0] == 1
+
+
+async def _approval_row(db_url, did) -> tuple[str, int]:
+    async with await psycopg.AsyncConnection.connect(db_url) as c:
+        status = await (
+            await c.execute("SELECT status FROM decisions WHERE id = %s", (did,))
+        ).fetchone()
+        n = await (
+            await c.execute(
+                "SELECT count(*) FROM notices WHERE reason = 'approval' AND decision_id = %s",
+                (did,),
+            )
+        ).fetchone()
+    return status[0], n[0]
+
+
+async def test_sweep_and_answer_race_sweep_first(service_client, db_url):
+    """The sweep holds the row lock; the answer's expiry guard already excludes the due row, so
+    it does not wait on the lock and loses as expired; the sweep's single notice stands."""
+    key = (await create(service_client))["key"]
+    did = (await ask_approval(service_client, key)).json()["id"]
+    async with (
+        await psycopg.AsyncConnection.connect(db_url, autocommit=True) as a,
+        await psycopg.AsyncConnection.connect(db_url, autocommit=True) as b,
+    ):
+        await a.execute(
+            "UPDATE decisions SET expires_at = now() - interval '1 second' WHERE id = %s", (did,)
+        )
+        async with a.transaction():
+            assert await repo.expire_approvals(a) == 1
+            answer = repo.answer_approval(b, did, "go", None, via="web", answer_ref=None)
+            result, _ = await asyncio.wait_for(answer, 5)
+            assert result == "expired"
+        late, decision = await repo.answer_approval(b, did, "go", None, via="web", answer_ref=None)
+        assert late == "expired" and decision is not None and decision.status == "expired"
+    assert await _approval_row(db_url, did) == ("expired", 1)
+
+
+async def test_sweep_and_answer_race_answer_first(service_client, db_url):
+    """The answer holds the row lock; the sweep skips it, and once committed it is not open."""
+    key = (await create(service_client))["key"]
+    did = (await ask_approval(service_client, key)).json()["id"]
+    async with (
+        await psycopg.AsyncConnection.connect(db_url, autocommit=True) as a,
+        await psycopg.AsyncConnection.connect(db_url, autocommit=True) as b,
+    ):
+        await a.execute(
+            "UPDATE decisions SET expires_at = now() + interval '2 second' WHERE id = %s",
+            (did,),
+        )
+        async with a.transaction():
+            result, _ = await repo.answer_approval(a, did, "go", None, via="web", answer_ref=None)
+            assert result == "answered"
+            await asyncio.sleep(2.3)
+            assert await repo.expire_approvals(b) == 0  # SKIP LOCKED
+        assert await repo.expire_approvals(b) == 0
+    assert await _approval_row(db_url, did) == ("answered", 1)
+
+
+async def test_batch_failure_mid_way_keeps_earlier_items(
+    service_client, web_client, conn, monkeypatch
+):
+    """Each item commits on its own: a DB error on a later item leaves earlier ones answered."""
+    key = (await create(service_client))["key"]
+    a1, a2 = [
+        (await ask_approval(service_client, key, client_key=f"k{i}")).json()["id"] for i in range(2)
+    ]
+    real = repo.answer_approval
+
+    async def failing(conn, decision_id, *args, **kwargs):
+        if decision_id == a2:
+            raise psycopg.errors.QueryCanceled("boom")
+        return await real(conn, decision_id, *args, **kwargs)
+
+    monkeypatch.setattr(repo, "answer_approval", failing)
+    with pytest.raises(psycopg.errors.QueryCanceled):
+        await web_client.post(
+            f"{PREFIX}/approvals/answer",
+            json={"items": [{"id": a2, "verdict": "go"}, {"id": a1, "verdict": "go"}]},
+        )
+    rows = conn.execute("SELECT id, status FROM decisions ORDER BY id").fetchall()
+    assert rows == [(a1, "answered"), (a2, "open")]
+
+
+async def test_overlapping_batches_in_opposite_order_both_complete(
+    service_client, web_client, conn, monkeypatch
+):
+    """Items run sorted by id and commit one by one, so two batches naming the same approvals in
+    opposite order cannot deadlock."""
+    key = (await create(service_client))["key"]
+    a1, a2 = [
+        (await ask_approval(service_client, key, client_key=f"k{i}")).json()["id"] for i in range(2)
+    ]
+    real = repo.answer_approval
+
+    async def slow(*args, **kwargs):
+        result = await real(*args, **kwargs)
+        await asyncio.sleep(0.3)  # interleave the two batches
+        return result
+
+    monkeypatch.setattr(repo, "answer_approval", slow)
+    url = f"{PREFIX}/approvals/answer"
+    rs = await asyncio.wait_for(
+        asyncio.gather(
+            web_client.post(
+                url, json={"items": [{"id": a1, "verdict": "go"}, {"id": a2, "verdict": "go"}]}
+            ),
+            web_client.post(
+                url,
+                json={"items": [{"id": a2, "verdict": "no_go"}, {"id": a1, "verdict": "no_go"}]},
+            ),
+        ),
+        15,
+    )
+    assert [r.status_code for r in rs] == [200, 200]
+    for did in (a1, a2):
+        results = sorted(i["result"] for r in rs for i in r.json()["items"] if i["id"] == did)
+        assert results == ["already_answered", "answered"]
+    assert [i["id"] for i in rs[1].json()["items"]] == [a2, a1]  # response keeps request order
