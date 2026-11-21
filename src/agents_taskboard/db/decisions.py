@@ -19,6 +19,8 @@ from agents_taskboard.api.actors import Actor
 from agents_taskboard.db.events import append_event, notify_changed
 from agents_taskboard.db.notices import enqueue_approval_notice, enqueue_decision_notice
 from agents_taskboard.db.scope import scoped
+from agents_taskboard.db.specs import NotFound, _lock_spec, approve_on_last_answer
+from agents_taskboard.db.steps import gate_task_id
 from agents_taskboard.db.tasks import task_key, task_url, touch_task
 
 USER = Actor(kind="user")
@@ -211,6 +213,15 @@ async def answer_decision(
     asking session (one per approval, folded per task for a question) and NOTIFY share the
     transaction."""
     async with conn.transaction():
+        # lock order spec, decision, task: patch_spec and the step writes lock the spec first, and
+        # two concurrent last answers serialise on the spec row (S-78)
+        spec_id = await _question_spec(conn, decision_id)
+        locked = None
+        if spec_id is not None:
+            try:
+                locked = await _lock_spec(conn, USER, spec_id)
+            except NotFound:
+                locked = None
         cur = await conn.execute(
             "UPDATE decisions SET status = 'answered', answer = %s, note = %s, answered_at = now(),"
             " answered_via = %s, answer_ref = %s"
@@ -229,7 +240,28 @@ async def answer_decision(
         else:
             await enqueue_decision_notice(conn, task_id, asking_session)
         await notify_changed(conn, task_id)
+        if locked is not None and await _on_gate_task(conn, locked["id"], task_id):
+            await approve_on_last_answer(conn, USER, locked, decision_id)
         return await get_decision(conn, USER, decision_id)
+
+
+async def _question_spec(conn: psycopg.AsyncConnection, decision_id: int) -> int | None:
+    """The spec of the task of an open question decision (unlocked read), else None."""
+    cur = await conn.execute(
+        "SELECT t.spec_id FROM decisions d JOIN tasks t ON t.id = d.task_id"
+        " WHERE d.id = %s AND d.kind = 'question' AND d.status = 'open'",
+        (decision_id,),
+    )
+    row = await cur.fetchone()
+    return None if row is None else row[0]
+
+
+async def _on_gate_task(conn: psycopg.AsyncConnection, spec_id: int, task_id: int) -> bool:
+    """Whether the task still belongs to the spec and is its gate task, so a step decision
+    answered during implementation never re-approves."""
+    cur = await conn.execute("SELECT spec_id FROM tasks WHERE id = %s", (task_id,))
+    row = await cur.fetchone()
+    return row is not None and row[0] == spec_id and await gate_task_id(conn, spec_id) == task_id
 
 
 async def unanswerable_reason(

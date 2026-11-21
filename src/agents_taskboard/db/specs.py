@@ -642,6 +642,59 @@ async def open_spec_decisions(conn: psycopg.AsyncConnection, spec_id: int) -> li
     return list(await cur.fetchall())
 
 
+async def record_spec_update(
+    conn: psycopg.AsyncConnection,
+    actor: Actor,
+    spec_id: int,
+    after: dict[str, Any],
+    detail: dict[str, Any],
+    *,
+    approved: bool,
+) -> None:
+    """The tail of every spec write, after its UPDATE: log one `spec_updated` event with `detail`
+    and notify. An approval also records the document versions it approved and queues one start
+    (`after` is the spec row as written: project, assignee_session, created_by_session). The
+    owner approving its own spec starts nothing (S-51 Q2); every other approval queues one start,
+    whose nudge replaces the generic spec notice."""
+    if approved:
+        detail["versions"] = {d["path"]: d["version"] for d in await list_documents(conn, spec_id)}
+    event_id = await append_spec_event(conn, spec_id, actor, "spec_updated", detail)
+    if approved:
+        owner = await spec_owner(
+            conn, spec_id, after["assignee_session"], after["created_by_session"]
+        )
+        if actor.kind == "user" or actor.session_id != owner:
+            from agents_taskboard.db.spec_starts import insert_start
+
+            await insert_start(conn, spec_id, event_id, after["project"])
+    await notify_spec_changed(conn, spec_id)
+
+
+async def approve_on_last_answer(
+    conn: psycopg.AsyncConnection, actor: Actor, spec: dict[str, Any], decision_id: int
+) -> bool:
+    """Approve the locked spec `spec` (a `_lock_spec` row) after the user answered its last open
+    question: only a draft or review spec, and only when no question on its open or in_progress
+    linked tasks is open. The caller decides that the answered decision is on the gate task.
+    Event detail carries `by: decisions_answered`; the event keeps `status.to == approved`."""
+    if spec["status"] not in ("draft", "review") or await open_spec_decisions(conn, spec["id"]):
+        return False
+    spec_id = spec["id"]
+    await conn.execute(
+        "UPDATE specs SET status = 'approved', version = version + 1, updated_at = now()"
+        " WHERE id = %s",
+        (spec_id,),
+    )
+    detail: dict[str, Any] = {
+        "fields": ["status"],
+        "status": {"from": spec["status"], "to": "approved"},
+        "by": "decisions_answered",
+        "decision_id": decision_id,
+    }
+    await record_spec_update(conn, actor, spec_id, spec, detail, approved=True)
+    return True
+
+
 async def patch_spec(
     conn: psycopg.AsyncConnection,
     actor: Actor,
@@ -700,10 +753,6 @@ async def patch_spec(
         detail: dict[str, Any] = {"fields": [k for k in changed if k != "assignee_slug"]}
         if "status" in changed:
             detail["status"] = {"from": row["status"], "to": changed["status"]}
-            if changed["status"] == "approved":
-                detail["versions"] = {
-                    d["path"]: d["version"] for d in await list_documents(conn, spec_id)
-                }
         if "project" in changed:
             detail["project"] = {"from": row["project"], "to": changed["project"]}
             from agents_taskboard.db.spec_starts import move_spec_starts
@@ -723,19 +772,14 @@ async def patch_spec(
                     {"from": row["project"], "to": changed["project"], "spec": spec_key(spec_id)},
                 )
                 await notify_changed(conn, task_id)
-        event_id = await append_spec_event(conn, spec_id, actor, "spec_updated", detail)
-        if changed.get("status") == "approved":
-            after = {**row, **changed}
-            owner = await spec_owner(
-                conn, spec_id, after["assignee_session"], after["created_by_session"]
-            )
-            # the owner approving its own spec starts nothing (S-51 Q2); every other approval
-            # queues one start, whose nudge replaces the generic spec notice
-            if actor.kind == "user" or actor.session_id != owner:
-                from agents_taskboard.db.spec_starts import insert_start
-
-                await insert_start(conn, spec_id, event_id, after["project"])
-        await notify_spec_changed(conn, spec_id)
+        await record_spec_update(
+            conn,
+            actor,
+            spec_id,
+            {**row, **changed},
+            detail,
+            approved=changed.get("status") == "approved",
+        )
         return True
 
 

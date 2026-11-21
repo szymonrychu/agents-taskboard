@@ -180,3 +180,82 @@ async def test_project_move_takes_new_and_queued_starts_along(service_client, we
     assert conn.execute(
         "SELECT count(*) FROM spec_starts WHERE project = %s AND status = 'queued'", (project,)
     ).fetchone() == (0,)
+
+
+async def _gate_spec(service_client, web_client, status="draft", questions=1):
+    """A spec in `status` whose gate task has `questions` open questions: (key, task, ids)."""
+    key = await make_spec(service_client)
+    r = await service_client.post(TASKS, json={"title": "own", "spec": key}, headers=agent())
+    task = r.json()["key"]
+    ids = [await ask(service_client, task, f"Q{i}?") for i in range(questions)]
+    if status != "draft":
+        r = await web_client.patch(f"{SPECS}/{key}", json={"version": 1, "status": status})
+        assert r.status_code == 200, r.text
+    return key, task, ids
+
+
+def _answer(client, task, did):
+    return client.post(f"{TASKS}/{task}/decisions/{did}/answer", json={"choice": 0})
+
+
+def _answer_approvals(conn, key):
+    return conn.execute(
+        "SELECT detail FROM events WHERE spec_id = %s AND kind = 'spec_updated'"
+        " AND detail->>'by' = 'decisions_answered'",
+        (int(key[2:]),),
+    ).fetchall()
+
+
+@pytest.mark.parametrize("status", ["draft", "review"])
+async def test_last_answer_on_gate_task_approves_and_starts(
+    service_client, web_client, conn, status
+):
+    key, task, (d1, d2) = await _gate_spec(service_client, web_client, status, questions=2)
+    assert (await _answer(web_client, task, d1)).status_code == 200
+    assert _answer_approvals(conn, key) == [] and starts(conn) == []
+    assert (await _answer(web_client, task, d2)).status_code == 200
+    assert (await web_client.get(f"{SPECS}/{key}")).json()["status"] == "approved"
+    events = _answer_approvals(conn, key)
+    assert len(events) == 1
+    assert events[0][0]["decision_id"] == d2 and events[0][0]["status"]["to"] == "approved"
+    assert starts(conn) == [(int(key[2:]), "new", 1)]
+
+
+@pytest.mark.parametrize("case", ["other_open", "approved", "archived", "withdrawn", "step_task"])
+async def test_answer_without_trigger_approves_nothing(service_client, web_client, conn, case):
+    key, task, ids = await _gate_spec(
+        service_client, web_client, questions=2 if case == "other_open" else 1
+    )
+    sid = int(key[2:])
+    if case in ("approved", "archived"):
+        r = await web_client.patch(f"{SPECS}/{key}", json={"version": 1, "status": case})
+        assert r.status_code == 200, r.text
+        conn.execute("UPDATE spec_starts SET status = 'handled', mode = 'started'")
+    before = len(starts(conn))
+    if case == "withdrawn":
+        r = await service_client.post(
+            f"{TASKS}/{task}/decisions/{ids[0]}/withdraw",
+            json={"reason": "r", "answered_elsewhere": "x"},
+            headers=agent(),
+        )
+        assert r.status_code == 200, r.text
+    elif case == "step_task":
+        assert (await _answer(web_client, task, ids[0])).status_code == 200
+        conn.execute("UPDATE specs SET status = 'draft' WHERE id = %s", (sid,))
+        conn.execute("DELETE FROM events WHERE spec_id = %s AND detail->>'by' IS NOT NULL", (sid,))
+        conn.execute("DELETE FROM spec_starts")
+        body = {"steps_version": 0, "steps": [{"n": 1, "title": "s", "body": "b"}]}
+        r = await service_client.put(f"{SPECS}/{key}/steps", json=body, headers=agent())
+        assert r.status_code == 200, r.text
+        step_key = r.json()["keys"][0]
+        step_dec = await ask(service_client, step_key, "step?")
+        before = len(starts(conn))
+        assert (await _answer(web_client, step_key, step_dec)).status_code == 200
+    else:
+        assert (await _answer(web_client, task, ids[0])).status_code == 200
+    expected = {"approved": "approved", "archived": "archived"}.get(case, "draft")
+    spec = conn.execute("SELECT status FROM specs WHERE id = %s", (sid,)).fetchone()[0]
+    assert spec == expected
+    assert len(starts(conn)) == before
+    if case != "step_task":
+        assert _answer_approvals(conn, key) == []

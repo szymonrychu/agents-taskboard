@@ -756,7 +756,11 @@ async def test_open_approval_does_not_block_gate_or_approve(service_client, web_
         True,
         [],
     )
-    q = await ask(service_client, own, "Q1?")
+    # a question on a non-gate task: answering it must not auto-approve (S-78)
+    other = (
+        await service_client.post(TASKS, json={"title": "other", "spec": key}, headers=agent())
+    ).json()["key"]
+    q = await ask(service_client, other, "Q1?")
     assert (await gate(service_client, key))["approvable"] is False
     member = agent(projects="default")  # not a superleader
     v = (await service_client.get(f"{SPECS}/{key}", headers=member)).json()["version"]
@@ -764,7 +768,7 @@ async def test_open_approval_does_not_block_gate_or_approve(service_client, web_
         f"{SPECS}/{key}", json={"status": "approved", "version": v}, headers=member
     )
     assert r.status_code == 409 and r.json()["error"]["code"] == "decisions_open"
-    await web_client.post(f"{TASKS}/{own}/decisions/{q}/answer", json={"choice": 0})
+    await web_client.post(f"{TASKS}/{other}/decisions/{q}/answer", json={"choice": 0})
     r = await service_client.patch(
         f"{SPECS}/{key}", json={"status": "approved", "version": v}, headers=member
     )
