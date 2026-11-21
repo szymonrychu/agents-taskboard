@@ -200,3 +200,25 @@ async def test_overlapping_batches_in_opposite_order_both_complete(
         results = sorted(i["result"] for r in rs for i in r.json()["items"] if i["id"] == did)
         assert results == ["already_answered", "answered"]
     assert [i["id"] for i in rs[1].json()["items"]] == [a2, a1]  # response keeps request order
+
+
+async def test_two_last_answers_concurrently_approve_once(service_client, web_client, conn):
+    from test_api_steps import SPECS, ask, make_spec
+    from test_api_tasks import agent
+
+    spec = await make_spec(service_client)
+    r = await service_client.post(TASKS, json={"title": "own", "spec": spec}, headers=agent())
+    task = r.json()["key"]
+    d1, d2 = await ask(service_client, task, "Q1?"), await ask(service_client, task, "Q2?")
+    rs = await asyncio.gather(
+        *(web_client.post(dec_url(task, d, "answer"), json={"choice": 0}) for d in (d1, d2))
+    )
+    assert [r.status_code for r in rs] == [200, 200]
+    assert (await web_client.get(f"{SPECS}/{spec}")).json()["status"] == "approved"
+    n = conn.execute(
+        "SELECT count(*) FROM events WHERE spec_id = %s AND kind = 'spec_updated'"
+        " AND detail->>'by' = 'decisions_answered'",
+        (int(spec[2:]),),
+    ).fetchone()[0]
+    assert n == 1
+    assert conn.execute("SELECT count(*) FROM spec_starts").fetchone()[0] == 1

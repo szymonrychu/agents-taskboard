@@ -78,13 +78,17 @@ def build_router(actor_dep: Callable[..., Actor], *, answerable: bool = False) -
             key: str, decision_id: int, body: DecisionAnswer, request: Request, actor: ActorDep
         ) -> dict[str, Any]:
             task_id = task_id_of(key)
-            async with pool_of(request).connection() as conn:
+            # One outer transaction, as in answer_approval: the earlier read would make
+            # answer_decision's own transaction a savepoint and hold the spec lock.
+            async with pool_of(request).connection() as conn, conn.transaction():
                 current = await repo.get_decision(conn, actor, decision_id)
                 if current is None or current.task_id != task_id:
                     raise ApiError(404, "not_found", f"no decision {decision_id} on {key}")
                 if current.kind == "approval" and body.choice is None:
                     raise ApiError(
-                        422, "invalid_request", "approval: answer with choice 0 (Go) or 1 (No-go)"
+                        422,
+                        "invalid_request",
+                        "approval: answer with choice 0 (Go) or 1 (No-go)",
                     )
                 if body.choice is not None:
                     if body.choice >= len(current.options):

@@ -31,7 +31,7 @@ from agents_taskboard.db.events import (
     notify_spec_changed,
 )
 from agents_taskboard.db.scope import scoped
-from agents_taskboard.db.specs import InvalidRequest, NotFound, TooLarge
+from agents_taskboard.db.specs import InvalidRequest, NotFound, TooLarge, lock_spec
 from agents_taskboard.db.tasks import STEP_BODY_CAP, parse_key, task_key
 
 __all__ = [
@@ -188,7 +188,7 @@ async def put_plan(
     _check_plan_items("constraints", constraints)
     _check_plan_items("review_focus", review_focus)
     async with conn.transaction():
-        await _lock_spec(conn, actor, spec_id)
+        await lock_spec(conn, actor, spec_id)
         cur = await conn.execute("SELECT version FROM spec_plans WHERE spec_id = %s", (spec_id,))
         row = await cur.fetchone()
         current = row[0] if row else 0
@@ -279,26 +279,12 @@ async def list_steps(
 # -- writing steps ---------------------------------------------------------------------------
 
 
-async def _lock_spec(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) -> dict[str, Any]:
-    """Row-lock the live spec within the actor's scope; NotFound otherwise."""
-    scope, params = scoped(actor, "s.project")
-    cur = await conn.cursor(row_factory=dict_row).execute(
-        "SELECT s.id, s.project, s.steps_version FROM specs s"
-        f" WHERE s.id = %s AND s.deleted_at IS NULL{scope} FOR UPDATE",
-        (spec_id, *params),
-    )
-    row = await cur.fetchone()
-    if row is None:
-        raise NotFound
-    return row
-
-
 async def _lock_steps(
     conn: psycopg.AsyncConnection, actor: Actor, spec_id: int, steps_version: int
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Lock the spec (checking `steps_version`) and its live steps; returns both, steps in
     order."""
-    spec = await _lock_spec(conn, actor, spec_id)
+    spec = await lock_spec(conn, actor, spec_id)
     if spec["steps_version"] != steps_version:
         raise StaleVersion(spec["steps_version"])
     cur = await conn.cursor(row_factory=dict_row).execute(
@@ -700,7 +686,7 @@ async def set_deps(
             raise InvalidRequest("the task is not a step")
         spec_id = row[0]
         # spec first, then the task: the lock order of every step-set write
-        await _lock_spec(conn, actor, spec_id)
+        await lock_spec(conn, actor, spec_id)
         cur = await conn.execute(
             "SELECT spec_id, step FROM tasks WHERE id = %s FOR UPDATE", (task_id,)
         )
