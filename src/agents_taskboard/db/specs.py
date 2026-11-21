@@ -217,12 +217,13 @@ async def spec_owner(
     return row[0] if row else None
 
 
-async def _lock_spec(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) -> dict[str, Any]:
+async def lock_spec(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int) -> dict[str, Any]:
     """Row-lock the live spec within the actor's scope; NotFound otherwise."""
     scope, params = scoped(actor, "s.project")
     cur = await conn.cursor(row_factory=dict_row).execute(
-        "SELECT s.id, s.project, s.status, s.version, s.assignee_session, s.created_by_session"
-        f" FROM specs s WHERE s.id = %s AND s.deleted_at IS NULL{scope} FOR UPDATE",
+        "SELECT s.id, s.project, s.status, s.version, s.steps_version, s.assignee_session,"
+        " s.created_by_session FROM specs s"
+        f" WHERE s.id = %s AND s.deleted_at IS NULL{scope} FOR UPDATE",
         (spec_id, *params),
     )
     row = await cur.fetchone()
@@ -406,7 +407,7 @@ async def write_version_locked(
     client_key: str | None,
     event: tuple[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], bool]:
-    """Write the next version of `path` in a spec the caller holds locked (`_lock_spec` row).
+    """Write the next version of `path` in a spec the caller holds locked (`lock_spec` row).
     A version after `approved` returns the spec to `review`. `event` overrides the event kind
     and adds to its detail (accepting a suggestion is one event, not two)."""
     spec_id = spec["id"]
@@ -469,7 +470,7 @@ async def put_document(
     check_body(body)
     _check_version_input(note, sources)
     async with conn.transaction():
-        spec = await _lock_spec(conn, actor, spec_id)
+        spec = await lock_spec(conn, actor, spec_id)
         return await write_version_locked(
             conn,
             actor,
@@ -547,7 +548,7 @@ async def soft_delete(conn: psycopg.AsyncConnection, actor: Actor, spec_id: int)
     detaches its tasks (each gets a `spec_detached` event; steps lose their number, plan client
     key and dependencies). Raises NotFound."""
     async with conn.transaction():
-        await _lock_spec(conn, actor, spec_id)
+        await lock_spec(conn, actor, spec_id)
         await conn.execute(
             "DELETE FROM task_deps d USING tasks t WHERE t.id = d.task_id AND t.spec_id = %s",
             (spec_id,),
@@ -671,15 +672,32 @@ async def record_spec_update(
 
 
 async def approve_on_last_answer(
-    conn: psycopg.AsyncConnection, actor: Actor, spec: dict[str, Any], decision_id: int
+    conn: psycopg.AsyncConnection,
+    actor: Actor,
+    spec: dict[str, Any],
+    task_id: int,
+    decision_id: int,
 ) -> bool:
-    """Approve the locked spec `spec` (a `_lock_spec` row) after the user answered its last open
-    question: only a draft or review spec, and only when no question on its open or in_progress
-    linked tasks is open. The caller decides that the answered decision is on the gate task.
-    Event detail carries `by: decisions_answered`; the event keeps `status.to == approved`."""
-    if spec["status"] not in ("draft", "review") or await open_spec_decisions(conn, spec["id"]):
-        return False
+    """Approve the locked spec `spec` (a `lock_spec` row) after the user answered a question on
+    `task_id`. Only for a draft or review spec that was never approved before and has documents,
+    when the task is still linked to it and is not a step, and no question on its open or
+    in_progress linked tasks is open. Event detail carries `by: decisions_answered`; the event
+    keeps `status.to == approved`."""
     spec_id = spec["id"]
+    if spec["status"] not in ("draft", "review") or await open_spec_decisions(conn, spec_id):
+        return False
+    cur = await conn.execute(
+        "SELECT 1 FROM tasks WHERE id = %s AND spec_id = %s AND step IS NULL", (task_id, spec_id)
+    )
+    if await cur.fetchone() is None or not await list_documents(conn, spec_id):
+        return False
+    cur = await conn.execute(
+        "SELECT 1 FROM events WHERE spec_id = %s AND kind = 'spec_updated'"
+        " AND detail->'status'->>'to' = 'approved' LIMIT 1",
+        (spec_id,),
+    )
+    if await cur.fetchone() is not None:
+        return False
     await conn.execute(
         "UPDATE specs SET status = 'approved', version = version + 1, updated_at = now()"
         " WHERE id = %s",
@@ -889,7 +907,7 @@ async def add_comment(
     check_body(body, COMMENT_CAP)
     check_body(suggestion)
     async with conn.transaction():
-        spec = await _lock_spec(conn, actor, spec_id)
+        spec = await lock_spec(conn, actor, spec_id)
         if path is not None:
             await _require_document(conn, spec_id, path, version)
         if client_key is not None:
@@ -950,7 +968,7 @@ async def resolve_comment(
 ) -> dict[str, Any]:
     """Resolve an open comment (status-guarded). Raises NotFound, AlreadyResolved."""
     async with conn.transaction():
-        await _lock_spec(conn, actor, spec_id)
+        await lock_spec(conn, actor, spec_id)
         cur = await conn.execute(
             "UPDATE spec_comments SET resolved_at = now(), resolved_by_kind = %s,"
             " resolved_by_session = %s, resolved_by_slug = %s"
@@ -1023,7 +1041,7 @@ async def accept_suggestion(
     event. Returns (version, comment). Raises NotFound, NoSuggestion, AlreadyDecided,
     StaleVersion (nothing changes)."""
     async with conn.transaction():
-        spec = await _lock_spec(conn, actor, spec_id)
+        spec = await lock_spec(conn, actor, spec_id)
         stored = await _open_suggestion(conn, spec_id, comment_id)
         written, _ = await write_version_locked(
             conn,
@@ -1049,7 +1067,7 @@ async def dismiss_suggestion(
     """Mark the suggestion dismissed and the comment resolved. Raises NotFound, NoSuggestion,
     AlreadyDecided."""
     async with conn.transaction():
-        spec = await _lock_spec(conn, actor, spec_id)
+        spec = await lock_spec(conn, actor, spec_id)
         await _open_suggestion(conn, spec_id, comment_id)
         await _decide(conn, actor, comment_id, "dismissed", None)
         await append_spec_event(

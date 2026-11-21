@@ -221,7 +221,10 @@ async def test_last_answer_on_gate_task_approves_and_starts(
     assert starts(conn) == [(int(key[2:]), "new", 1)]
 
 
-@pytest.mark.parametrize("case", ["other_open", "approved", "archived", "withdrawn", "step_task"])
+@pytest.mark.parametrize(
+    "case",
+    ["other_open", "approved", "archived", "withdrawn", "step_task", "no_documents", "reapproved"],
+)
 async def test_answer_without_trigger_approves_nothing(service_client, web_client, conn, case):
     key, task, ids = await _gate_spec(
         service_client, web_client, questions=2 if case == "other_open" else 1
@@ -239,6 +242,22 @@ async def test_answer_without_trigger_approves_nothing(service_client, web_clien
             headers=agent(),
         )
         assert r.status_code == 200, r.text
+    elif case == "no_documents":
+        conn.execute("DELETE FROM spec_versions WHERE spec_id = %s", (sid,))
+        assert (await _answer(web_client, task, ids[0])).status_code == 200
+    elif case == "reapproved":
+        assert (await _answer(web_client, task, ids[0])).status_code == 200
+        assert len(starts(conn)) == 1
+        r = await service_client.put(
+            f"{SPECS}/{key}/docs/plan.md",
+            json={"body": "again", "base_version": 1},
+            headers=agent(),
+        )
+        assert r.status_code in (200, 201), r.text
+        assert (await web_client.get(f"{SPECS}/{key}")).json()["status"] == "review"
+        before = len(starts(conn))
+        again = await ask(service_client, task, "later?")
+        assert (await _answer(web_client, task, again)).status_code == 200
     elif case == "step_task":
         assert (await _answer(web_client, task, ids[0])).status_code == 200
         conn.execute("UPDATE specs SET status = 'draft' WHERE id = %s", (sid,))
@@ -253,9 +272,23 @@ async def test_answer_without_trigger_approves_nothing(service_client, web_clien
         assert (await _answer(web_client, step_key, step_dec)).status_code == 200
     else:
         assert (await _answer(web_client, task, ids[0])).status_code == 200
-    expected = {"approved": "approved", "archived": "archived"}.get(case, "draft")
+    expected = {"approved": "approved", "archived": "archived", "reapproved": "review"}.get(
+        case, "draft"
+    )
     spec = conn.execute("SELECT status FROM specs WHERE id = %s", (sid,)).fetchone()[0]
     assert spec == expected
     assert len(starts(conn)) == before
-    if case != "step_task":
+    if case not in ("step_task", "reapproved"):
         assert _answer_approvals(conn, key) == []
+
+
+async def test_last_answer_on_second_non_step_task_approves(service_client, web_client, conn):
+    key, task, (d1,) = await _gate_spec(service_client, web_client)
+    r = await service_client.post(TASKS, json={"title": "two", "spec": key}, headers=agent())
+    second = r.json()["key"]
+    d2 = await ask(service_client, second, "Q2?")
+    assert (await _answer(web_client, task, d1)).status_code == 200
+    assert _answer_approvals(conn, key) == []
+    assert (await _answer(web_client, second, d2)).status_code == 200
+    assert (await web_client.get(f"{SPECS}/{key}")).json()["status"] == "approved"
+    assert len(_answer_approvals(conn, key)) == 1 and len(starts(conn)) == 1
