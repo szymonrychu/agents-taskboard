@@ -756,7 +756,7 @@ async def test_open_approval_does_not_block_gate_or_approve(service_client, web_
         True,
         [],
     )
-    # a question on a non-gate task: answering it must not auto-approve (S-78)
+    # a question on a second linked task; its answer is the last one (S-78)
     other = (
         await service_client.post(TASKS, json={"title": "other", "spec": key}, headers=agent())
     ).json()["key"]
